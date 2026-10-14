@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
+  <!-- MrVoie アイコン（大サイズ用・.icns / README / LP のマスター）。
+       兄弟アプリ（MRDown / MrEditor / MrDiff / MrShip / MrPosts）と同じ design language:
+         角丸 / 上部に gloss / 中央に白い線画グリフ 1 つ（round cap）。強調は差し色ではなく白の濃さ（opacity）で出す。
+
+       グリフは「ドットの V」。左右から会話（点）が集まり、下の大きな 1 点（残る記録）に収束する。
+       点は下へ向かって濃くなる（.45 / .7 / .9 / 1）＝積み上がる向き。
+       V の形は Voie（道）の頭文字でもある。
+
+       色は fuchsia（ホットピンク、色相およそ 320°）。兄弟が violet / teal / indigo / coral / amber なので、
+       coral（約 15°）とも violet（約 250°）とも離れた位置を選んだ。Dock で並んだとき別物と分かること。
+       青系は兄弟に多く、緑は teal と被り、グラファイトは Mrk 系の黒と混ざるため外した。
+
+       **カンバスいっぱいに描かないこと。** macOS のアプリアイコンは 1024px のうち
+       角丸本体が 824px（= 80.47%）で、周囲に余白と落ち影を持つ。 -->
+  <defs>
+    <linearGradient id="fuchsia" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF7AC8"/>
+      <stop offset="1" stop-color="#A8167A"/>
+    </linearGradient>
+    <radialGradient id="gloss" cx="50%" cy="0%" r="80%">
+      <stop offset="0" stop-color="#fff" stop-opacity=".14"/>
+      <stop offset="55%" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1.6" stdDeviation="1.6" flood-color="#0B1020" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <!-- 本体 824/1024 = 80.47%。左上 (9.77, 9.77)。角丸は本体の 22.5%（Apple の比率）。 -->
+  <g filter="url(#shadow)">
+    <g transform="translate(9.765 9.765) scale(0.8047)">
+      <rect width="100" height="100" rx="23" fill="url(#fuchsia)"/>
+      <rect width="100" height="100" rx="23" fill="url(#gloss)"/>
+      <!-- 点は長さ 0 の線（round cap で丸になる）。 -->
+      <g stroke="#ffffff" stroke-linecap="round">
+        <line x1="26" y1="26" x2="26" y2="26" stroke-width="10" opacity=".45"/>
+        <line x1="35" y1="44" x2="35" y2="44" stroke-width="10" opacity=".7"/>
+        <line x1="43" y1="62" x2="43" y2="62" stroke-width="10" opacity=".9"/>
+        <line x1="74" y1="26" x2="74" y2="26" stroke-width="10" opacity=".45"/>
+        <line x1="65" y1="44" x2="65" y2="44" stroke-width="10" opacity=".7"/>
+        <line x1="57" y1="62" x2="57" y2="62" stroke-width="10" opacity=".9"/>
+        <line x1="50" y1="80" x2="50" y2="80" stroke-width="15"/>
+      </g>
+    </g>
+  </g>
+</svg>
