@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_versions (
@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 "#;
 
+const MIGRATION_2: &str = r#"
+CREATE TABLE IF NOT EXISTS collector_files (
+    source_tool TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    byte_offset INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(source_tool, source_file)
+);
+"#;
+
 pub fn default_db_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("MRVOIE_DB") {
         return Ok(PathBuf::from(path));
@@ -124,7 +134,7 @@ fn migrate(conn: &Connection) -> Result<()> {
             applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );",
     )?;
-    let current: i64 = conn.query_row(
+    let mut current: i64 = conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
         [],
         |row| row.get(0),
@@ -137,7 +147,17 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute_batch(MIGRATION_1)?;
         tx.execute(
             "INSERT INTO schema_versions(version) VALUES (?1)",
-            params![SCHEMA_VERSION],
+            params![1],
+        )?;
+        tx.commit()?;
+        current = 1;
+    }
+    if current < 2 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_2)?;
+        tx.execute(
+            "INSERT INTO schema_versions(version) VALUES (?1)",
+            params![2],
         )?;
         tx.commit()?;
     }

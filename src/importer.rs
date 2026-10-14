@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const CLAUDE_TOOL: &str = "claude_code";
@@ -15,6 +15,92 @@ pub struct ImportReport {
     pub sessions: usize,
     pub events: usize,
     pub skipped_lines: usize,
+}
+
+/// Claude CodeのJSONLを、前回の読み取り位置からSQLiteへ追記する。
+/// 初回はファイル全体を読み、その後は追記された完全な行だけを読む。
+pub fn collect_claude_incremental(root: &Path, conn: &mut Connection) -> Result<ImportReport> {
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    files.sort();
+
+    let tx = conn.transaction()?;
+    let mut report = ImportReport::default();
+    for path in files {
+        collect_claude_file(&tx, &path, &mut report)?;
+    }
+    tx.commit()?;
+    Ok(report)
+}
+
+fn collect_claude_file(
+    tx: &rusqlite::Transaction<'_>,
+    path: &Path,
+    report: &mut ImportReport,
+) -> Result<()> {
+    let source_file = path.to_string_lossy().into_owned();
+    let file_size = std::fs::metadata(path)?.len();
+    let saved_offset: u64 = tx
+        .query_row(
+            "SELECT byte_offset FROM collector_files WHERE source_tool = ?1 AND source_file = ?2",
+            params![CLAUDE_TOOL, source_file],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0)
+        .max(0) as u64;
+    let offset = if saved_offset > file_size { 0 } else { saved_offset };
+
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let complete_len = bytes.iter().rposition(|byte| *byte == b'\n').map(|index| index + 1).unwrap_or(0);
+    let next_offset = offset + complete_len as u64;
+    let text = String::from_utf8_lossy(&bytes[..complete_len]);
+
+    let mut project_path = String::new();
+    let mut session_key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+    let mut rows = Vec::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            report.skipped_lines += 1;
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+            if project_path.is_empty() { project_path = cwd.to_string(); }
+        }
+        if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
+            session_key = id.to_string();
+        }
+        let Some((occurred_at, role, content)) = event_content(&value) else { continue; };
+        let event_id = value.get("uuid").and_then(Value::as_str).map(str::to_owned)
+            .unwrap_or_else(|| format!("{session_key}:{offset}:{}", line_index));
+        rows.push((event_id, occurred_at, role, content, line_index as i64));
+    }
+
+    if !rows.is_empty() {
+        if project_path.is_empty() { project_path = "(unknown)".to_string(); }
+        let (session_id, created) = find_or_create_session(tx, &source_file, &project_path, &session_key)?;
+        if created { report.sessions += 1; }
+        for (event_id, occurred_at, role, content, sequence) in rows {
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![session_id, CLAUDE_TOOL, event_id, occurred_at, role, content, sequence],
+            )?;
+            report.events += inserted;
+        }
+    }
+    if next_offset != saved_offset {
+        tx.execute(
+            "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(source_tool, source_file) DO UPDATE SET byte_offset = excluded.byte_offset, updated_at = CURRENT_TIMESTAMP",
+            params![CLAUDE_TOOL, source_file, next_offset as i64],
+        )?;
+        if next_offset > saved_offset { report.files += 1; }
+    }
+    Ok(())
 }
 
 /// Claude CodeのJSONLセッションをSQLiteへ追記する。

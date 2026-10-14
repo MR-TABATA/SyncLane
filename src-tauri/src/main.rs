@@ -1,10 +1,13 @@
-use mrvoie::db::{self, TimelineEvent};
+use mrvoie::{db, importer};
+use mrvoie::db::TimelineEvent;
 use rusqlite::Connection;
 use serde::Serialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-struct AppState(Mutex<Connection>);
+struct AppState(Arc<Mutex<Connection>>);
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -71,8 +74,23 @@ fn main() {
     let path = db::default_db_path().expect("failed to resolve MrVoie database path");
     let conn = db::open(&path).expect("failed to open MrVoie database");
 
+    let shared_conn = Arc::new(Mutex::new(conn));
+    let collector_conn = Arc::clone(&shared_conn);
+    thread::spawn(move || {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let root = home.join(".claude").join("projects");
+        loop {
+            if let Ok(mut conn) = collector_conn.lock() {
+                if let Err(error) = importer::collect_claude_incremental(&root, &mut conn) {
+                    eprintln!("mrvoie collector: {error:#}");
+                }
+            }
+            thread::sleep(Duration::from_secs(30));
+        }
+    });
+
     tauri::Builder::default()
-        .manage(AppState(Mutex::new(conn)))
+        .manage(AppState(shared_conn))
         .invoke_handler(tauri::generate_handler![status, timeline, open_search_window, close_search_window])
         .run(tauri::generate_context!())
         .expect("error while running MrVoie");
