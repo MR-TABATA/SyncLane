@@ -2,6 +2,7 @@
 /target/
 target/
 /MrVoie.app/
+/MrCairn.app/
 *.db
 *.db-shm
 *.db-wal

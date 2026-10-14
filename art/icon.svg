@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
-  <!-- MrVoie アイコン（大サイズ用・.icns / README / LP のマスター）。
+  <!-- MrCairn アイコン(旧名 MrVoie)（大サイズ用・.icns / README / LP のマスター）。
        兄弟アプリ（MRDown / MrEditor / MrDiff / MrShip / MrPosts）と同じ design language:
          角丸 / 上部に gloss / 中央に白い線画グリフ 1 つ（round cap）。強調は差し色ではなく白の濃さ（opacity）で出す。
 
        グリフは「ドットの V」。左右から会話（点）が集まり、下の大きな 1 点（残る記録）に収束する。
        点は下へ向かって濃くなる（.45 / .7 / .9 / 1）＝積み上がる向き。
-       V の形は Voie（道）の頭文字でもある。
+       V の形は、旧名 Voie（道）の頭文字だった。改名後(Cairn=旅人が1つずつ積む道標の石)は、点を積み石に見立てる。
 
        色は fuchsia（ホットピンク、色相およそ 320°）。兄弟が violet / teal / indigo / coral / amber なので、
        coral（約 15°）とも violet（約 250°）とも離れた位置を選んだ。Dock で並んだとき別物と分かること。

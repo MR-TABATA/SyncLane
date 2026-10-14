@@ -1,12 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use mrvoie::{db, importer};
+use mrcairn::{db, importer};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "mrvoie", version, about = "MrVoie local journal store")]
+#[command(name = "mrcairn", version, about = "MrCairn local journal store")]
 struct Cli {
-    /// SQLite database path. Defaults to ~/Library/Application Support/MrVoie/mrvoie.db.
+    /// SQLite database path. Defaults to ~/Library/Application Support/MrCairn/mrcairn.db.
     #[arg(long, global = true)]
     db: Option<PathBuf>,
     #[command(subcommand)]
@@ -65,7 +65,7 @@ enum ImportSource {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("mrvoie: {error:#}");
+        eprintln!("mrcairn: {error:#}");
         std::process::exit(1);
     }
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MrVoie</title>
+  <title>MrCairn</title>
   <style>
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
     * { box-sizing: border-box; }
@@ -71,7 +71,7 @@
       <div class="field"><label for="date-mode">日付条件</label><select id="date-mode"><option value="range">期間指定</option><option value="around">この頃（前後）</option></select></div>
       <div id="range-fields" class="date-range"><div class="field"><label for="range-from">開始</label><input id="range-from" type="date" /></div><div class="field"><label for="range-to">終了</label><input id="range-to" type="date" /></div></div>
       <div id="around-fields" class="around-range" hidden><div class="field"><label for="around-date">基準日</label><input id="around-date" type="date" /></div><div class="field"><label for="around-days">前後（日）</label><input id="around-days" type="number" min="0" max="365" value="5" /></div></div>
-      <div class="field"><label for="query">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: MrVoie SQLite" /></div>
+      <div class="field"><label for="query">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: MrCairn SQLite" /></div>
       <button id="refresh">表示</button>
       <div class="search-nav"><button id="previous" type="button" disabled>前を検索</button><button id="next" type="button" disabled>次を検索</button></div>
       </div>
@@ -188,7 +188,7 @@
       }
     });
     function publishSearch() {
-      localStorage.setItem('mrvoie-search', JSON.stringify({
+      localStorage.setItem('mrcairn-search', JSON.stringify({
         dateMode: $('date-mode').value,
         rangeFrom: $('range-from').value,
         rangeTo: $('range-to').value,
@@ -199,7 +199,7 @@
       }));
     }
     window.addEventListener('storage', (event) => {
-      if (isSearchWindow || event.key !== 'mrvoie-search' || !event.newValue) return;
+      if (isSearchWindow || event.key !== 'mrcairn-search' || !event.newValue) return;
       const value = JSON.parse(event.newValue);
       $('date-mode').value = value.dateMode === 'around' ? 'around' : 'range';
       $('range-from').value = value.rangeFrom || '';

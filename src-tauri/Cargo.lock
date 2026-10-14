@@ -1981,7 +1981,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mrvoie"
+name = "mrcairn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1992,11 +1992,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "mrvoie-app"
+name = "mrcairn-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "mrvoie",
+ "mrcairn",
  "rusqlite",
  "serde",
  "tauri",

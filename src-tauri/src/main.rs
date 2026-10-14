@@ -1,5 +1,5 @@
-use mrvoie::{db, importer};
-use mrvoie::db::TimelineEvent;
+use mrcairn::{db, importer};
+use mrcairn::db::TimelineEvent;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -52,7 +52,7 @@ fn open_search_window(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let window = WebviewWindowBuilder::new(&app, "search", WebviewUrl::App("index.html#search".into()))
-        .title("MrVoie 検索")
+        .title("MrCairn 検索")
         .inner_size(720.0, 250.0)
         .min_inner_size(600.0, 210.0)
         .resizable(true)
@@ -71,8 +71,8 @@ fn close_search_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn main() {
-    let path = db::default_db_path().expect("failed to resolve MrVoie database path");
-    let conn = db::open(&path).expect("failed to open MrVoie database");
+    let path = db::default_db_path().expect("failed to resolve MrCairn database path");
+    let conn = db::open(&path).expect("failed to open MrCairn database");
 
     let shared_conn = Arc::new(Mutex::new(conn));
     let collector_conn = Arc::clone(&shared_conn);
@@ -82,7 +82,7 @@ fn main() {
         loop {
             if let Ok(mut conn) = collector_conn.lock() {
                 if let Err(error) = importer::collect_claude_incremental(&root, &mut conn) {
-                    eprintln!("mrvoie collector: {error:#}");
+                    eprintln!("mrcairn collector: {error:#}");
                 }
             }
             thread::sleep(Duration::from_secs(30));
@@ -93,5 +93,5 @@ fn main() {
         .manage(AppState(shared_conn))
         .invoke_handler(tauri::generate_handler![status, timeline, open_search_window, close_search_window])
         .run(tauri::generate_context!())
-        .expect("error while running MrVoie");
+        .expect("error while running MrCairn");
 }

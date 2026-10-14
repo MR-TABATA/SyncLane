@@ -1,8 +1,8 @@
 [package]
-name = "mrvoie"
+name = "mrcairn"
 version = "0.1.0"
 edition = "2024"
-description = "MrVoie: a local-first journal for AI-assisted work history"
+description = "MrCairn: a local-first journal for AI-assisted work history"
 
 [dependencies]
 anyhow = "1"
