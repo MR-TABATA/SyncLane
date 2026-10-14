@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MrVoie</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #eeeef0; background: #292b34; }
+    header { position: fixed; inset: 0 0 auto; z-index: 20; display: block; height: 58px; border-bottom: 1px solid #4c515f; background: #2c303a; box-shadow: 0 6px 18px rgb(0 0 0 / .16); }
+    .brand { display: none; }
+    .brand span { color: #c9a86a; }
+    .subtle { color: #92958f; font-size: 12px; }
+    header > .subtle { display: none; }
+    main { display: block; margin-top: 58px; }
+    section { min-width: 0; padding: 30px 38px 60px; background: #252832; }
+    .toolbar { position: absolute; top: 0; right: 0; left: 0; z-index: 30; height: 58px; padding: 9px 18px; background: #2c303a; }
+    .header-icons { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .header-leading, .header-trailing { display: flex; align-items: center; gap: 8px; }
+    .icon-button { width: 40px; height: 40px; padding: 0; border-radius: 9px; color: #eeeef0; background: #454852; border-color: #5b5e68; font-size: 22px; line-height: 1; }
+    .search-panel { position: fixed; top: 76px; right: 32px; z-index: 50; display: none; width: min(720px, calc(100vw - 64px)); padding: 0; border: 1px solid #454941; border-radius: 10px; background: #1b1d1b; box-shadow: 0 18px 42px rgb(0 0 0 / .45); }
+    body.search-open .search-panel { display: block; }
+    body.search-window { min-width: 600px; background: #1b1d1b; }
+    body.search-window header { position: static; display: block; height: auto; border: 0; background: #1b1d1b; }
+    body.search-window main { display: none; }
+    body.search-window .toolbar { position: static; height: auto; padding: 0; background: #1b1d1b; }
+    body.search-window .header-icons { display: none; }
+    body.search-window .search-panel { position: static; display: block; width: 100%; border: 0; border-radius: 0; box-shadow: none; }
+    .search-panel-body { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 14px; }
+    body.search-open.date-expanded .search-panel-body { row-gap: 10px; }
+    .search-panel .field { display: flex; flex-direction: column; }
+    .search-panel #query { width: 360px; }
+    .search-panel #range-from, .search-panel #range-to, .search-panel #around-date { width: 150px; }
+    .search-panel #around-days { width: 76px; }
+    .search-panel .date-range, .search-panel .around-range { display: flex; gap: 8px; align-items: end; }
+    .search-panel [hidden] { display: none !important; }
+    label { display: block; color: #92958f; font-size: 12px; margin-bottom: 6px; }
+    input, select, button { height: 42px; border: 1px solid #454941; border-radius: 7px; color: #e8e7e2; background: #1d1f1d; padding: 9px 11px; font: inherit; }
+    #query { width: 360px; }
+    button { cursor: pointer; background: #b89558; border-color: #b89558; color: #17130d; font-weight: 650; }
+    button:disabled { cursor: default; opacity: .45; }
+    .search-nav { display: flex; gap: 8px; }
+    .search-nav button { background: #262a28; border-color: #454941; color: #e8e7e2; }
+    .timeline-pairs { display: flex; flex-direction: column; }
+    .timeline-pair-head, .timeline-pair-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .timeline-pair-head { position: sticky; top: 58px; z-index: 2; color: #a6a8b0; background: #252832; font-size: 11px; font-weight: 600; letter-spacing: .14em; }
+    .timeline-pair-head > div { padding: 8px 12px; }
+    .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 1px solid #3e434f; }
+    .timeline-pair-row:nth-child(even) { background: rgb(255 255 255 / .025); }
+    .timeline-pair-row > .event { min-width: 0; }
+    .event { scroll-margin-top: 155px; padding: 17px 12px; border-top: 1px solid #3e434f; }
+    .event.selected { background: rgb(111 150 255 / .10); }
+    .event-meta { display: flex; gap: 10px; align-items: center; color: #a6a8b0; font-size: 12px; }
+    .source { color: #7ea4ff; border: 1px solid #3d5c9c; border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+    .role { color: #c9a86a; text-transform: uppercase; letter-spacing: .08em; }
+    .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+    .empty { color: #92958f; padding: 40px 0; }
+    @media (max-width: 900px) {
+      .timeline-pair-head, .timeline-pair-row { grid-template-columns: 1fr; }
+      .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+  <div class="toolbar">
+    <div class="header-icons"><div class="header-leading"></div><div class="header-trailing"><button id="toggle-search" class="icon-button" type="button" aria-label="検索" title="検索（⌘F）">⌕</button></div></div>
+    <div class="search-panel">
+      <div class="search-panel-body">
+      <div class="field"><label for="date-mode">日付条件</label><select id="date-mode"><option value="range">期間指定</option><option value="around">この頃（前後）</option></select></div>
+      <div id="range-fields" class="date-range"><div class="field"><label for="range-from">開始</label><input id="range-from" type="date" /></div><div class="field"><label for="range-to">終了</label><input id="range-to" type="date" /></div></div>
+      <div id="around-fields" class="around-range" hidden><div class="field"><label for="around-date">基準日</label><input id="around-date" type="date" /></div><div class="field"><label for="around-days">前後（日）</label><input id="around-days" type="number" min="0" max="365" value="5" /></div></div>
+      <div class="field"><label for="query">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: MrVoie SQLite" /></div>
+      <button id="refresh">表示</button>
+      <div class="search-nav"><button id="previous" type="button" disabled>前を検索</button><button id="next" type="button" disabled>次を検索</button></div>
+      </div>
+    </div>
+  </div></header>
+  <main>
+    <section><div id="timeline"><div class="empty">読み込み中…</div></div></section>
+  </main>
+  <script>
+    const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    const isSearchWindow = location.hash === '#search';
+    if (isSearchWindow) document.body.classList.add('search-window');
+    const $ = (id) => document.getElementById(id);
+    const short = (text) => text.length > 800 ? text.slice(0, 800) + "…" : text;
+    let searchResults = [];
+    let selectedResult = -1;
+    function addDays(date, days) {
+      const value = new Date(`${date}T00:00:00`);
+      value.setDate(value.getDate() + days);
+      return value.toISOString().slice(0, 10);
+    }
+    function searchDates() {
+      const mode = $('date-mode').value;
+      if (mode === 'range') {
+        const from = $('range-from').value || null;
+        const to = $('range-to').value ? addDays($('range-to').value, 1) : null;
+        return { from, to, label: from || to ? `${from || '…'}〜${to ? addDays(to, -1) : '…'}` : '期間未指定' };
+      }
+      if (mode === 'around' && $('around-date').value) {
+        const days = Math.max(0, Number($('around-days').value) || 0);
+        const center = $('around-date').value;
+        return { from: addDays(center, -days), to: addDays(center, days + 1), label: `${center} 前後${days}日` };
+      }
+      return { from: null, to: null, label: '日付指定なし' };
+    }
+    function updateDateFields() {
+      const mode = $('date-mode').value;
+      document.body.classList.toggle('date-expanded', true);
+      const range = $('range-fields');
+      const around = $('around-fields');
+      range.hidden = mode !== 'range';
+      around.hidden = mode !== 'around';
+      range.style.display = mode === 'range' ? 'flex' : 'none';
+      around.style.display = mode === 'around' ? 'flex' : 'none';
+    }
+    async function load() {
+      if (!invoke) { $('timeline').innerHTML = '<div class="empty">Tauriアプリから起動してください。</div>'; return; }
+      const info = await invoke('status');
+      if ($('events')) $('events').textContent = info.events.toLocaleString();
+      if ($('sessions')) $('sessions').textContent = info.sessions.toLocaleString();
+      if ($('journals')) $('journals').textContent = info.journals.toLocaleString();
+      const dates = isSearchWindow ? searchDates() : { from: null, to: null };
+      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query: isSearchWindow ? ($('query').value || null) : null, limit: 100 });
+      searchResults = events;
+      selectedResult = events.length ? 0 : -1;
+      renderEvents();
+      updateSearchNav();
+    }
+    function renderEvents() {
+      if (!searchResults.length) { $('timeline').innerHTML = '<div class="empty">この条件の記録はありません。</div>'; return; }
+      const rows = [];
+      for (let i = 0; i < searchResults.length;) {
+        const current = searchResults[i];
+        const next = searchResults[i + 1];
+        if (current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
+          rows.push({ user: { e: next, index: i + 1 }, assistant: { e: current, index: i } });
+          i += 2;
+        } else if (current.role.toUpperCase() === 'USER') {
+          rows.push({ user: { e: current, index: i }, assistant: null });
+          i += 1;
+        } else {
+          rows.push({ user: null, assistant: { e: current, index: i } });
+          i += 1;
+        }
+      }
+      $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>USER</div><div>ASSISTANT</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
+      if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
+    }
+    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${e.occurred_at}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${e.role}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
+    function updateSearchNav() {
+      $('previous').disabled = selectedResult <= 0;
+      $('next').disabled = selectedResult < 0 || selectedResult >= searchResults.length - 1;
+    }
+    function moveSearch(offset) {
+      const next = selectedResult + offset;
+      if (next < 0 || next >= searchResults.length) return;
+      selectedResult = next;
+      renderEvents();
+      updateSearchNav();
+    }
+    function sourceLabel(source) { return ({ claude_code: 'Claude Code', gemini_cli: 'Gemini CLI' }[source] || source); }
+    function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function setSearchOpen(open) {
+      if (isSearchWindow) return;
+      document.body.classList.toggle('search-open', open);
+      if (open) setTimeout(() => $('query').focus(), 0);
+    }
+    async function openSearchWindow() {
+      if (!invoke) return;
+      try {
+        await invoke('open_search_window');
+      } catch (error) {
+        console.error('検索ウィンドウを開けませんでした', error);
+      }
+    }
+    $('toggle-search').addEventListener('click', () => { if (!isSearchWindow) openSearchWindow(); });
+    document.addEventListener('keydown', (event) => {
+      if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        openSearchWindow();
+      } else if (event.key === 'Escape') {
+        if (isSearchWindow) invoke?.('close_search_window');
+        else if (document.body.classList.contains('search-open')) setSearchOpen(false);
+      }
+    });
+    function publishSearch() {
+      localStorage.setItem('mrvoie-search', JSON.stringify({
+        dateMode: $('date-mode').value,
+        rangeFrom: $('range-from').value,
+        rangeTo: $('range-to').value,
+        aroundDate: $('around-date').value,
+        aroundDays: $('around-days').value,
+        query: $('query').value,
+        stamp: Date.now()
+      }));
+    }
+    window.addEventListener('storage', (event) => {
+      if (isSearchWindow || event.key !== 'mrvoie-search' || !event.newValue) return;
+      const value = JSON.parse(event.newValue);
+      $('date-mode').value = value.dateMode === 'around' ? 'around' : 'range';
+      $('range-from').value = value.rangeFrom || '';
+      $('range-to').value = value.rangeTo || '';
+      $('around-date').value = value.aroundDate || '';
+      $('around-days').value = value.aroundDays || '5';
+      $('query').value = value.query || '';
+      updateDateFields();
+      load();
+    });
+    $('date-mode').addEventListener('change', updateDateFields);
+    $('refresh').addEventListener('click', () => { isSearchWindow ? publishSearch() : load(); });
+    $('query').addEventListener('keydown', (event) => { if (event.key === 'Enter') isSearchWindow ? publishSearch() : load(); });
+    $('previous').addEventListener('click', () => moveSearch(-1));
+    $('next').addEventListener('click', () => moveSearch(1));
+    updateDateFields();
+    if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">読み込みに失敗しました: ${escapeHtml(String(err))}</div>`; });
+  </script>
+</body>
+</html>
