@@ -1,12 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use mrcairn::{db, importer};
+use synclane::{db, importer};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "mrcairn", version, about = "MrCairn local journal store")]
+#[command(name = "synclane", version, about = "SyncLane local journal store")]
 struct Cli {
-    /// SQLite database path. Defaults to ~/Library/Application Support/MrCairn/mrcairn.db.
+    /// SQLite database path. Defaults to ~/Library/Application Support/SyncLane/synclane.db.
     #[arg(long, global = true)]
     db: Option<PathBuf>,
     #[command(subcommand)]
@@ -65,7 +65,7 @@ enum ImportSource {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("mrcairn: {error:#}");
+        eprintln!("synclane: {error:#}");
         std::process::exit(1);
     }
 }

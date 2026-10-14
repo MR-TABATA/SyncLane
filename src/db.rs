@@ -93,15 +93,15 @@ CREATE TABLE IF NOT EXISTS collector_files (
 "#;
 
 pub fn default_db_path() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("MRCAIRN_DB") {
+    if let Ok(path) = std::env::var("SYNCLANE_DB") {
         return Ok(PathBuf::from(path));
     }
     let home = std::env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("MrCairn")
-        .join("mrcairn.db"))
+        .join("SyncLane")
+        .join("synclane.db"))
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -140,7 +140,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if current > SCHEMA_VERSION {
-        bail!("database schema version {current} is newer than this MrCairn ({SCHEMA_VERSION})");
+        bail!("database schema version {current} is newer than this SyncLane ({SCHEMA_VERSION})");
     }
     if current < 1 {
         let tx = conn.unchecked_transaction()?;
@@ -318,7 +318,7 @@ mod tests {
             "INSERT INTO sessions(source_tool, project_path) VALUES ('test', '/projects/other')",
             [],
         )?;
-        for (id, content) in [("one", "MrCairn SQLite search"), ("two", "MrCairn timeline"), ("three", "SQLite only")] {
+        for (id, content) in [("one", "SyncLane SQLite search"), ("two", "SyncLane timeline"), ("three", "SQLite only")] {
             conn.execute(
                 "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
                  VALUES (1, 'test', ?1, '2026-10-13T00:00:00Z', 'user', ?2, 0)",
@@ -326,9 +326,9 @@ mod tests {
             )?;
         }
 
-        let results = timeline(&conn, None, Some("MrCairn SQLite"), 20)?;
+        let results = timeline(&conn, None, Some("SyncLane SQLite"), 20)?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].content, "MrCairn SQLite search");
+        assert_eq!(results[0].content, "SyncLane SQLite search");
         Ok(())
     }
 }

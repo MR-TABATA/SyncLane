@@ -1,4 +1,4 @@
-# MrCairn
+# SyncLane
 
 AIとの会話や作業ログを収集し、日々の歩みとして保存・検索・表示するローカルファーストアプリ。
 
@@ -12,7 +12,7 @@ AIとの会話や作業ログを収集し、日々の歩みとして保存・検
 cargo run --manifest-path src-tauri/Cargo.toml --offline
 ```
 
-画面のデータは既定のSQLite（`~/Library/Application Support/MrCairn/mrcairn.db`）から読み込む。
+画面のデータは既定のSQLite（`~/Library/Application Support/SyncLane/synclane.db`）から読み込む。
 
 ## 開発
 
@@ -27,7 +27,7 @@ cargo test --offline
 データベースの既定の保存先は次のとおり。
 
 ```text
-~/Library/Application Support/MrCairn/mrcairn.db
+~/Library/Application Support/SyncLane/synclane.db
 ```
 
 開発中は `--db` で保存先を変更できる。
@@ -35,18 +35,18 @@ cargo test --offline
 ```sh
 cargo run -- init
 cargo run -- status
-cargo run -- --db /tmp/mrcairn.db init
-cargo run -- --db /tmp/mrcairn.db status
-cargo run -- --db /tmp/mrcairn.db timeline --limit 20
-cargo run -- --db /tmp/mrcairn.db timeline --date 2026-10-13 --limit 20
+cargo run -- --db /tmp/synclane.db init
+cargo run -- --db /tmp/synclane.db status
+cargo run -- --db /tmp/synclane.db timeline --limit 20
+cargo run -- --db /tmp/synclane.db timeline --date 2026-10-13 --limit 20
 cargo run -- import claude --date 2026-10-13
-cargo run -- --db /tmp/mrcairn.db import claude --root ~/.claude/projects --date 2026-10-13
+cargo run -- --db /tmp/synclane.db import claude --root ~/.claude/projects --date 2026-10-13
 ```
 
-`MRCAIRN_DB` 環境変数でも保存先を指定できる。
+`SYNCLANE_DB` 環境変数でも保存先を指定できる。
 
 ```sh
-MRCAIRN_DB=/tmp/mrcairn.db cargo run -- status
+SYNCLANE_DB=/tmp/synclane.db cargo run -- status
 ```
 
 ## Claude Codeログの取り込み
@@ -74,7 +74,7 @@ cargo run -- import gemini --all
 `timeline` は保存済みイベントを新しい順に表示する。Tauri画面の表示モデルを固めるための初期版。
 
 ```sh
-cargo run -- --db /tmp/mrcairn.db timeline --date YYYY-MM-DD --limit 20
+cargo run -- --db /tmp/synclane.db timeline --date YYYY-MM-DD --limit 20
 ```
 
 ## 現在のスキーマ

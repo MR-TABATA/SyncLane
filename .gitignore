@@ -3,6 +3,7 @@
 target/
 /MrVoie.app/
 /MrCairn.app/
+/SyncLane.app/
 *.db
 *.db-shm
 *.db-wal

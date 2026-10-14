@@ -430,7 +430,7 @@ mod tests {
 
     fn tempfile_dir() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "mrcairn-test-{}-{}",
+            "synclane-test-{}-{}",
             std::process::id(),
             TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

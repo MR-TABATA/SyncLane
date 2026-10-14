@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MrCairn",
+  "productName": "SyncLane",
   "version": "0.1.0",
-  "identifier": "com.mrcairn.app",
+  "identifier": "com.synclane.app",
   "build": {
     "frontendDist": "../web"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "MrCairn",
+        "title": "SyncLane",
         "width": 1100,
         "height": 760,
         "backgroundColor": "#5d6068",
@@ -23,7 +23,7 @@
       },
       {
         "label": "search",
-        "title": "MrCairn 検索",
+        "title": "SyncLane 検索",
         "url": "index.html#search",
         "width": 720,
         "height": 250,
