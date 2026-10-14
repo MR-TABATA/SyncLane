@@ -1,8 +1,6 @@
 .DS_Store
 /target/
 target/
-/MrVoie.app/
-/MrCairn.app/
 /SyncLane.app/
 *.db
 *.db-shm
