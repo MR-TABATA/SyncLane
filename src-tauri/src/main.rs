@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 struct AppState(Arc<Mutex<Connection>>);
@@ -96,6 +97,60 @@ fn mcp_executable() -> Result<String, String> {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
 }
 
+/// 画面上部のメニューバー。既定のメニューは英語固定なので、システムの言語に合わせて自前で組む。
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let ja = sys_locale::get_locale().map(|l| l.to_lowercase().starts_with("ja")).unwrap_or(false);
+    let t = |ja_text: &'static str, en_text: &'static str| Some(if ja { ja_text } else { en_text });
+    let app_menu = Submenu::with_items(
+        app,
+        "SyncLane",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, t("SyncLane について", "About SyncLane"), None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, t("サービス", "Services"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, t("SyncLane を隠す", "Hide SyncLane"))?,
+            &PredefinedMenuItem::hide_others(app, t("ほかを隠す", "Hide Others"))?,
+            &PredefinedMenuItem::show_all(app, t("すべてを表示", "Show All"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, t("SyncLane を終了", "Quit SyncLane"))?,
+        ],
+    )?;
+    let edit_menu = Submenu::with_items(
+        app,
+        if ja { "編集" } else { "Edit" },
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, t("取り消す", "Undo"))?,
+            &PredefinedMenuItem::redo(app, t("やり直す", "Redo"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, t("切り取り", "Cut"))?,
+            &PredefinedMenuItem::copy(app, t("コピー", "Copy"))?,
+            &PredefinedMenuItem::paste(app, t("ペースト", "Paste"))?,
+            &PredefinedMenuItem::select_all(app, t("すべてを選択", "Select All"))?,
+        ],
+    )?;
+    let view_menu = Submenu::with_items(
+        app,
+        if ja { "表示" } else { "View" },
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, t("フルスクリーンにする", "Enter Full Screen"))?],
+    )?;
+    let window_menu = Submenu::with_items(
+        app,
+        if ja { "ウインドウ" } else { "Window" },
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, t("しまう", "Minimize"))?,
+            &PredefinedMenuItem::maximize(app, t("拡大／縮小", "Zoom"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, t("ウインドウを閉じる", "Close Window"))?,
+        ],
+    )?;
+    Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == "--mcp") {
         run_mcp();
@@ -110,6 +165,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .manage(AppState(shared_conn))
         .setup(move |app| {
+            app.set_menu(build_menu(app.handle())?)?;
             let handle = app.handle().clone();
             thread::spawn(move || {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
