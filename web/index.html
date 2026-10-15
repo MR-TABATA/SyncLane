@@ -81,7 +81,22 @@
     .event-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
     .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
     .role { color: var(--role); letter-spacing: .08em; }
-    .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); }
+    .event-content { margin: 8px 0 0; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); overflow-wrap: anywhere; }
+    .event-content > :first-child { margin-top: 0; }
+    .event-content > :last-child { margin-bottom: 0; }
+    .event-content p { margin: 0 0 .6em; white-space: pre-wrap; }
+    .event-content h1, .event-content h2, .event-content h3, .event-content h4, .event-content h5, .event-content h6 { margin: .9em 0 .4em; line-height: 1.35; }
+    .event-content h1 { font-size: 1.35em; } .event-content h2 { font-size: 1.2em; } .event-content h3 { font-size: 1.08em; } .event-content h4, .event-content h5, .event-content h6 { font-size: 1em; }
+    .event-content ul, .event-content ol { margin: 0 0 .6em; padding-left: 1.6em; }
+    .event-content blockquote { margin: 0 0 .6em; padding: 0 0 0 12px; border-left: 3px solid var(--line); color: var(--muted); }
+    .event-content hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+    .event-content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; padding: .1em .35em; border-radius: 4px; background: var(--surface-3); }
+    .event-content pre { margin: 0 0 .6em; padding: 10px 12px; border-radius: 6px; background: var(--surface-3); overflow-x: auto; }
+    .event-content pre code { padding: 0; background: none; white-space: pre; }
+    .event-content table { border-collapse: collapse; margin: 0 0 .6em; display: block; overflow-x: auto; }
+    .event-content th, .event-content td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+    .event-content th { background: var(--surface-3); }
+    .event-content a { color: var(--source); }
     .more { margin-top: 8px; padding: 2px 0; border: 0; background: none; color: var(--source); font-size: 12px; }
     .more:hover:not(:disabled) { background: none; text-decoration: underline; }
     .event-meta .title { color: var(--text); font-weight: 600; }
@@ -492,7 +507,7 @@
       const long = e.content.length > PREVIEW_CHARS;
       const open = long && expanded.has(index);
       const more = long ? `<button class="more" type="button" data-more="${index}">${t(open ? 'collapse' : 'expand')}</button>` : '';
-      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span></div><div class="event-content">${escapeHtml(open ? e.content : short(e.content))}</div>${more}</article>`;
+      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
     }
     // 長い本文の「全文を表示 / 折りたたむ」(一覧を組み直さず、その1件だけ差し替える)
     $('timeline').addEventListener('click', (event) => {
@@ -517,6 +532,62 @@
     // 保存される値は USER / ASSISTANT のまま。表示だけ言語に合わせる
     function roleLabel(role) { const r = role.toUpperCase(); return r === 'USER' ? t('roleUser') : r === 'ASSISTANT' ? t('roleAssistant') : role; }
     function sourceLabel(source) { return ({ claude_code: 'Claude Code', gemini_cli: 'Gemini CLI' }[source] || source); }
+    // Markdown を安全な HTML にする(先に全体をエスケープし、リンクは http(s) だけ許す)
+    function inlineMd(raw) {
+      const codes = [];
+      let t = escapeHtml(raw).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+      t = t.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+        .replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_, a, b) => `<strong>${a || b}</strong>`)
+        .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?!\*)/g, '$1<em>$2</em>')
+        .replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+      return t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+    }
+    function renderMarkdown(src) {
+      const lines = src.replace(/\r\n?/g, '\n').split('\n');
+      const out = [];
+      let i = 0;
+      const isBlockStart = (l) => /^(```|#{1,6}\s|>|\s*([-*+]|\d+\.)\s|\s*([-*_]\s*){3,}$)/.test(l);
+      while (i < lines.length) {
+        const line = lines[i];
+        let m;
+        if ((m = line.match(/^\s*```(.*)$/))) {
+          const buf = [];
+          i++;
+          while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
+          i++;
+          out.push(`<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
+        } else if (!line.trim()) {
+          i++;
+        } else if ((m = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) {
+          out.push(`<h${m[1].length}>${inlineMd(m[2])}</h${m[1].length}>`);
+          i++;
+        } else if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+          out.push('<hr>');
+          i++;
+        } else if (/^>/.test(line)) {
+          const buf = [];
+          while (i < lines.length && /^>/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ''));
+          out.push(`<blockquote>${renderMarkdown(buf.join('\n'))}</blockquote>`);
+        } else if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+          const ordered = /^\s*\d+\./.test(line);
+          const items = [];
+          while (i < lines.length && (m = lines[i].match(/^\s*(?:[-*+]|\d+\.)\s+(.*)$/))) { items.push(inlineMd(m[1])); i++; }
+          out.push(`<${ordered ? 'ol' : 'ul'}>${items.map(x => `<li>${x}</li>`).join('')}</${ordered ? 'ol' : 'ul'}>`);
+        } else if (line.includes('|') && i + 1 < lines.length && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+          const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map(c => inlineMd(c.trim()));
+          const head = cells(line);
+          i += 2;
+          const rows = [];
+          while (i < lines.length && lines[i].includes('|') && lines[i].trim()) rows.push(cells(lines[i++]));
+          out.push(`<table><thead><tr>${head.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+        } else {
+          const buf = [];
+          while (i < lines.length && lines[i].trim() && (buf.length === 0 || !isBlockStart(lines[i]))) buf.push(lines[i++]);
+          out.push(`<p>${buf.map(inlineMd).join('<br>')}</p>`);
+        }
+      }
+      return out.join('');
+    }
     function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function setSearchOpen(open) {
       if (isSearchWindow) return;
