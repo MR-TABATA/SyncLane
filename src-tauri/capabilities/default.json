@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "メイン画面と検索画面が、コマンド呼び出しとイベント受信を使えるようにする",
+  "windows": [
+    "main",
+    "search"
+  ],
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

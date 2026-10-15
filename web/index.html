@@ -55,6 +55,9 @@
     .source { color: #7ea4ff; border: 1px solid #3d5c9c; border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
     .role { color: #c9a86a; text-transform: uppercase; letter-spacing: .08em; }
     .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+    .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid #5b5e68; border-radius: 10px; background: #2c303a; box-shadow: 0 10px 28px rgb(0 0 0 / .4); font-size: 13px; }
+    .update-bar[hidden] { display: none; }
+    .update-bar button { height: 32px; padding: 4px 12px; }
     .empty { color: #92958f; padding: 40px 0; }
     @media (max-width: 900px) {
       .timeline-pair-head, .timeline-pair-row { grid-template-columns: 1fr; }
@@ -80,6 +83,7 @@
   <main>
     <section><div id="timeline"><div class="empty">読み込み中…</div></div></section>
   </main>
+  <div id="update-bar" class="update-bar" hidden><span id="update-text"></span><button id="update-run" type="button">更新して再起動</button></div>
   <script>
     const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INTERNALS__?.invoke;
     const isSearchWindow = location.hash === '#search';
@@ -215,7 +219,34 @@
     $('query').addEventListener('keydown', (event) => { if (event.key === 'Enter') isSearchWindow ? publishSearch() : load(); });
     $('previous').addEventListener('click', () => moveSearch(-1));
     $('next').addEventListener('click', () => moveSearch(1));
+    // 新しい版があれば、メイン画面の右下に出す。更新は本人が押したときだけ入れる
+    async function checkUpdate() {
+      const updater = window.__TAURI__?.updater;
+      if (!updater || !$('update-bar').hidden) return;
+      try {
+        const update = await updater.check();
+        if (!update) return;
+        $('update-text').textContent = `新しい版 ${update.version} があります`;
+        $('update-bar').hidden = false;
+        $('update-run').addEventListener('click', async () => {
+          $('update-run').disabled = true;
+          $('update-text').textContent = '更新しています…';
+          try {
+            await update.downloadAndInstall();
+            await window.__TAURI__.process.relaunch();
+          } catch (error) {
+            $('update-text').textContent = `更新できませんでした: ${error}`;
+            $('update-run').disabled = false;
+          }
+        });
+      } catch (error) {
+        console.error('更新の確認に失敗しました', error);
+      }
+    }
+    if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
     updateDateFields();
+    // 収集役が新しい会話を取り込んだら、メイン画面の一覧を最新にする
+    if (!isSearchWindow) window.__TAURI__?.event?.listen('events-updated', () => load().catch(() => {}));
     if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">読み込みに失敗しました: ${escapeHtml(String(err))}</div>`; });
   </script>
 </body>

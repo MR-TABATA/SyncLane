@@ -5,3 +5,4 @@ target/
 *.db
 *.db-shm
 *.db-wal
+src-tauri/target/

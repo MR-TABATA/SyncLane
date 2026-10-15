@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"メイン画面と検索画面が、コマンド呼び出しとイベント受信を使えるようにする","local":true,"windows":["main","search"],"permissions":["core:default","updater:default","process:allow-restart"]}}

@@ -15,7 +15,7 @@
         "height": 760,
         "backgroundColor": "#5d6068",
         "transparent": true,
-        "titleBarStyle": "transparent",
+        "titleBarStyle": "Transparent",
         "minWidth": 720,
         "minHeight": 500,
         "center": true,
@@ -38,7 +38,26 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "category": "DeveloperTool"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyNURFQkREMTg5QzMxNDgKUldSSU1ad1kzZXRkc2w2bzB1b2xQeDNBWWNKNnhCcC9ULzBRQlFJeExGWmkwTVIyaGFhaUZlVXcK",
+      "endpoints": [
+        "https://mrktools.app/downloads/synclane/update.json"
+      ]
+    }
   }
 }
