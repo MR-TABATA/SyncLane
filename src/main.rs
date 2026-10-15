@@ -28,6 +28,8 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Run an MCP server over stdio so AI clients can search saved conversations (read-only).
+    Mcp,
     /// Import logs from a supported source.
     Import {
         #[command(subcommand)]
@@ -73,9 +75,15 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let path = cli.db.unwrap_or(db::default_db_path()?);
+    if matches!(cli.command, Command::Mcp) {
+        // 標準出力は JSON-RPC 専用。読み取り専用で開き、マイグレーションはしない
+        let conn = db::open_readonly(&path)?;
+        return synclane::mcp::serve(&conn, std::io::stdin().lock(), std::io::stdout().lock());
+    }
     let mut conn = db::open(&path)?;
 
     match cli.command {
+        Command::Mcp => unreachable!("handled above"),
         Command::Init => {
             println!("initialized {} (schema v{})", path.display(), db::schema_version(&conn)?);
         }

@@ -118,6 +118,41 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// 読み取り専用で開く(MCP など、アプリとは別のプロセスから読む用)。
+/// マイグレーションはしない。アプリが書き込み中でも待てるよう、待ち時間を設ける。
+pub fn open_readonly(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("failed to open database {} (start the SyncLane app once to create it)", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let version = schema_version(&conn).unwrap_or(0);
+    if version < SCHEMA_VERSION {
+        bail!("database schema v{version} is older than this SyncLane (v{SCHEMA_VERSION}); start the SyncLane app once to update it");
+    }
+    Ok(conn)
+}
+
+/// 1つのセッションの会話を、時刻順に返す。
+/// `around`(イベントID)があれば、その前後 `window` 件ずつ。無ければ先頭から `window * 2 + 1` 件。
+/// ログの並び順の番号(sequence)は増分の収集で重なるため、時刻と ID で並べる。
+pub fn session_events(conn: &Connection, session_id: i64, around: Option<i64>, window: usize) -> Result<Vec<TimelineEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id
+         FROM events e JOIN sessions s ON s.id = e.session_id
+         WHERE e.session_id = ?1 ORDER BY e.occurred_at ASC, e.id ASC",
+    )?;
+    let all = stmt
+        .query_map([session_id], row_to_timeline_event)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let (start, end) = match around.and_then(|id| all.iter().position(|e| e.event_id == id)) {
+        Some(index) => (index.saturating_sub(window), (index + window + 1).min(all.len())),
+        None => (0, (window * 2 + 1).min(all.len())),
+    };
+    Ok(all[start..end].to_vec())
+}
+
 #[cfg(test)]
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
@@ -192,13 +227,14 @@ pub struct RoleCounts {
     pub assistant: i64,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TimelineEvent {
     pub session_id: i64,
     pub occurred_at: String,
     pub source_tool: String,
     pub project_path: String,
     pub title: Option<String>,
+    pub event_id: i64,
     pub role: String,
     pub content: String,
 }
@@ -230,7 +266,7 @@ pub fn timeline_range(
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
     let mut sql = String::from(
-        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id
          FROM events e
          JOIN sessions s ON s.id = e.session_id",
     );
@@ -282,6 +318,7 @@ fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEv
         role: row.get(4)?,
         content: row.get(5)?,
         title: row.get(6)?,
+        event_id: row.get(7)?,
     })
 }
 

@@ -75,7 +75,31 @@ fn close_search_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// `--mcp` で起動されたときは、画面を出さず、MCP サーバーとして標準入出力で動く(読み取り専用)。
+/// Claude Code などには `<このアプリの実行ファイル> --mcp` を登録する。
+fn run_mcp() -> ! {
+    let result = db::default_db_path()
+        .and_then(|path| db::open_readonly(&path))
+        .and_then(|conn| synclane::mcp::serve(&conn, std::io::stdin().lock(), std::io::stdout().lock()));
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("synclane mcp: {error:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 設定画面に出す、MCP 登録用の実行ファイルのパス。
+#[tauri::command]
+fn mcp_executable() -> Result<String, String> {
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
+}
+
 fn main() {
+    if std::env::args().any(|arg| arg == "--mcp") {
+        run_mcp();
+    }
     let path = db::default_db_path().expect("failed to resolve SyncLane database path");
     let conn = db::open(&path).expect("failed to open SyncLane database");
 
@@ -112,7 +136,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, timeline, open_search_window, close_search_window])
+        .invoke_handler(tauri::generate_handler![status, timeline, mcp_executable, open_search_window, close_search_window])
         .run(tauri::generate_context!())
         .expect("error while running SyncLane");
 }

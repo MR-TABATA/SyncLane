@@ -113,6 +113,9 @@
     .color-custom::after { content: '+'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text); font-size: 14px; pointer-events: none; }
     .color-custom.has-value::after { content: ''; }
     .color-custom input[type="color"] { position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px); padding: 0; border: none; background: none; cursor: pointer; }
+    .note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .note.warn { margin-top: 14px; color: var(--text); }
+    textarea.code { width: 100%; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; resize: none; }
     .radio-row { display: flex; flex-direction: column; gap: 6px; }
     .radio-row label { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 13px; }
     .size-value { margin-bottom: 8px; font-size: 13px; }
@@ -171,6 +174,7 @@
         <nav class="settings-nav" role="tablist">
           <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
           <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
+          <button class="settings-nav-item" type="button" data-tab="mcp">MCP</button>
         </nav>
         <div class="settings-content">
           <section class="settings-pane active" data-pane="appearance">
@@ -184,6 +188,14 @@
             <div id="font-option" class="radio-row"></div>
             <div class="opt-title" data-i18n="fontSizeLabel">本文サイズ</div>
             <div id="fontsize-option"></div>
+          </section>
+          <section class="settings-pane" data-pane="mcp">
+            <p class="note" data-i18n="mcpIntro">Claude Code などの AI が、保存した過去の会話を検索できるようにします。AI に「前にどう決めたっけ」と聞くと、SyncLane から探して答えます。</p>
+            <div class="opt-title" data-i18n="mcpCommand">Claude Code に登録するコマンド</div>
+            <textarea id="mcp-command" class="code" readonly rows="3"></textarea>
+            <div class="opt-row"><button id="mcp-copy" type="button" data-i18n="mcpCopy">コピー</button></div>
+            <p class="note warn" data-i18n="mcpWarn">登録すると、その AI は保存した全会話を読めるようになります。会話の中にパスワードやコードが含まれていないか、確認してから登録してください。通信は PC の中だけで、ネットワークには出ません。読み取り専用です。</p>
+            <p class="note" data-i18n="mcpMove">アプリを別の場所に移したときは、登録し直してください。</p>
           </section>
           <section class="settings-pane" data-pane="lang">
             <div class="opt-title" data-i18n="language">表示する言語</div>
@@ -204,7 +216,7 @@
     // ---- 言語 ----
     const I18N = {
       ja: {
-        expand: '全文を表示', collapse: '折りたたむ', counts: (n, u, a) => `${n}件（あなた：${u}件　AI：${a}件）`, roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
+        expand: '全文を表示', collapse: '折りたたむ', counts: (n, u, a) => `${n}件（あなた：${u}件　AI：${a}件）`, mcpIntro: 'Claude Code などの AI が、保存した過去の会話を検索できるようにします。AI に「前にどう決めたっけ」と聞くと、SyncLane から探して答えます。', mcpCommand: 'Claude Code に登録するコマンド', mcpCopy: 'コピー', mcpCopied: 'コピーしました', mcpWarn: '登録すると、その AI は保存した全会話を読めるようになります。会話の中にパスワードやコードが含まれていないか、確認してから登録してください。通信は PC の中だけで、ネットワークには出ません。読み取り専用です。', mcpMove: 'アプリを別の場所に移したときは、登録し直してください。', roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
         from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
@@ -214,7 +226,7 @@
         colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
       },
       en: {
-        expand: 'Show all', collapse: 'Collapse', counts: (n, u, a) => `${n} events (You: ${u}  AI: ${a})`, roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
+        expand: 'Show all', collapse: 'Collapse', counts: (n, u, a) => `${n} events (You: ${u}  AI: ${a})`, mcpIntro: 'Lets AI tools such as Claude Code search the conversations you have saved. Ask the AI “how did we decide that?” and it looks in SyncLane.', mcpCommand: 'Command to register with Claude Code', mcpCopy: 'Copy', mcpCopied: 'Copied', mcpWarn: 'Once registered, that AI can read all of your saved conversations. Check that they contain no passwords or sensitive code first. Everything stays on this computer, and access is read-only.', mcpMove: 'If you move the app, register it again.', roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
         from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
@@ -360,7 +372,22 @@
       document.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.toggle('active', b === btn));
       document.querySelectorAll('.settings-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === btn.dataset.tab));
     }));
-    $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; });
+    async function fillMcpCommand() {
+      if (!invoke || $('mcp-command').value) return;
+      try {
+        const exe = await invoke('mcp_executable');
+        const quoted = /[\s'"]/.test(exe) ? `"${exe.replace(/(["\\$`])/g, '\\$1')}"` : exe;
+        $('mcp-command').value = `claude mcp add synclane -- ${quoted} --mcp`;
+      } catch (_) {}
+    }
+    $('mcp-copy').addEventListener('click', async () => {
+      const text = $('mcp-command').value;
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) { $('mcp-command').select(); document.execCommand('copy'); }
+      $('mcp-copy').textContent = t('mcpCopied');
+      setTimeout(() => { $('mcp-copy').textContent = t('mcpCopy'); }, 1500);
+    });
+    $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; fillMcpCommand(); });
     $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
     $('settings-overlay').addEventListener('click', (e) => { if (e.target === $('settings-overlay')) $('settings-overlay').hidden = true; });
 
@@ -504,6 +531,7 @@
       if (!isSearchWindow && event.metaKey && !event.shiftKey && !event.altKey && event.key === ',') {
         event.preventDefault();
         $('settings-overlay').hidden = !$('settings-overlay').hidden;
+        if (!$('settings-overlay').hidden) fillMcpCommand();
       } else if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
         event.preventDefault();
         openSearchWindow();
