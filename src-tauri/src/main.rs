@@ -14,6 +14,8 @@ struct AppInfo {
     schema: i64,
     sessions: i64,
     events: i64,
+    user_events: i64,
+    assistant_events: i64,
     journals: i64,
     analyses: i64,
 }
@@ -22,10 +24,13 @@ struct AppInfo {
 fn status(state: tauri::State<'_, AppState>) -> Result<AppInfo, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let counts = db::counts(&conn).map_err(|e| e.to_string())?;
+    let roles = db::role_counts(&conn).map_err(|e| e.to_string())?;
     Ok(AppInfo {
         schema: db::schema_version(&conn).map_err(|e| e.to_string())?,
         sessions: counts.sessions,
-        events: counts.events,
+        events: roles.total,
+        user_events: roles.user,
+        assistant_events: roles.assistant,
         journals: counts.journals,
         analyses: counts.analyses,
     })

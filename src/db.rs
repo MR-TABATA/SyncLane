@@ -185,6 +185,13 @@ pub struct Counts {
     pub analyses: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct RoleCounts {
+    pub total: i64,
+    pub user: i64,
+    pub assistant: i64,
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct TimelineEvent {
     pub session_id: i64,
@@ -276,6 +283,14 @@ fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEv
         content: row.get(5)?,
         title: row.get(6)?,
     })
+}
+
+/// イベントの件数を、全体・ユーザー・AIに分けて返す。
+pub fn role_counts(conn: &Connection) -> Result<RoleCounts> {
+    let count_of = |role: &str| -> Result<i64> {
+        Ok(conn.query_row("SELECT COUNT(*) FROM events WHERE LOWER(role) = ?1", [role], |row| row.get(0))?)
+    };
+    Ok(RoleCounts { total: count(conn, "events")?, user: count_of("user")?, assistant: count_of("assistant")? })
 }
 
 pub fn counts(conn: &Connection) -> Result<Counts> {

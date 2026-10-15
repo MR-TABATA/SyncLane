@@ -35,6 +35,7 @@
     section.page { min-width: 0; padding: 14px 38px 60px; background: var(--bg); }
     .toolbar { position: absolute; top: 0; right: 0; left: 0; z-index: 30; height: 58px; padding: 9px 16px; background: var(--surface); }
     .header-icons { display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 100%; }
+    .counts { margin-right: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* ボタンの形・大きさ・並びは MrkDown と同じ(余白 6px 12px、角丸 6px、間隔 8px、アイコン 14〜15px) */
     button { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-2); font: inherit; font-size: 13px; cursor: pointer; }
     button:hover:not(:disabled) { background: var(--surface-3); }
@@ -125,6 +126,7 @@
   <header>
   <div class="toolbar">
     <div class="header-icons">
+      <span id="counts" class="counts"></span>
       <button id="reload-btn" class="icon-button" type="button" data-i18n-title="reload" aria-label="再読み込み">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
         <span id="reload-dot" class="dot" hidden></span>
@@ -202,7 +204,7 @@
     // ---- 言語 ----
     const I18N = {
       ja: {
-        expand: '全文を表示', collapse: '折りたたむ', roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
+        expand: '全文を表示', collapse: '折りたたむ', counts: (n, u, a) => `${n}件（あなた：${u}件　AI：${a}件）`, roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
         from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
@@ -212,7 +214,7 @@
         colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
       },
       en: {
-        expand: 'Show all', collapse: 'Collapse', roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
+        expand: 'Show all', collapse: 'Collapse', counts: (n, u, a) => `${n} events (You: ${u}  AI: ${a})`, roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
         from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
@@ -278,6 +280,7 @@
       renderSettingsOptions();
       if (typeof showNew === 'function') showNew(hasNew);
       if (loaded) renderEvents();
+      renderCounts();
     }
     function saveSettings() {
       try { localStorage.setItem('synclane-settings', JSON.stringify(settings)); } catch (_) {}
@@ -409,8 +412,20 @@
       $('range-fields').style.display = mode === 'range' ? 'flex' : 'none';
       $('around-fields').style.display = mode === 'around' ? 'flex' : 'none';
     }
+    // 全体の件数(絞り込みに関係なく、保存してある全イベント)。一覧を読み込むときに更新する
+    let lastCounts = null;
+    function renderCounts() {
+      if (!lastCounts) return;
+      const f = (n) => n.toLocaleString(resolvedLang() === 'ja' ? 'ja-JP' : 'en-US');
+      $('counts').textContent = t('counts', f(lastCounts.events), f(lastCounts.user_events), f(lastCounts.assistant_events));
+    }
+    async function showCounts() {
+      lastCounts = await invoke('status');
+      renderCounts();
+    }
     async function load() {
       if (!invoke) { $('timeline').innerHTML = `<div class="empty">${t('needApp')}</div>`; return; }
+      if (!isSearchWindow) showCounts().catch(() => {});
       const bySearch = isSearchWindow || searchActive;
       const dates = bySearch ? searchDates() : mainDates();
       const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query: bySearch ? ($('query').value || null) : null, limit: 100 });
