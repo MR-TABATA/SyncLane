@@ -8,19 +8,25 @@
     :root {
       color-scheme: dark;
       font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-      --bg: #252832; --surface: #2c303a; --surface-2: #454852; --surface-3: #555966; --border: #4c515f;
-      --text: #eeeef0; --muted: #a6a8b0; --faint: #92958f; --input-bg: #1d1f1d; --input-border: #454941;
-      --accent: #b89558; --accent-text: #17130d; --source: #7ea4ff; --source-border: #3d5c9c; --role: #c9a86a;
-      --row-alt: rgb(255 255 255 / .025); --selected: rgb(111 150 255 / .10); --line: #3e434f;
-      --shadow: rgb(0 0 0 / .45); --panel: #1b1d1b;
-    }
-    :root[data-resolved="light"] {
-      color-scheme: light;
-      --bg: #f5f6f8; --surface: #ffffff; --surface-2: #eceef2; --surface-3: #dfe2e8; --border: #cfd3db;
-      --text: #1f2330; --muted: #5d6475; --faint: #7b8191; --input-bg: #ffffff; --input-border: #c3c8d2;
-      --source: #2f5bd6; --source-border: #a9bdf0; --role: #8a6a2b;
-      --row-alt: rgb(0 0 0 / .025); --selected: rgb(47 91 214 / .08); --line: #dfe2e8;
-      --shadow: rgb(0 0 0 / .18); --panel: #ffffff;
+      /* 設定の「外観」で変えられるのは、この4つ。ほかの色は背景色と文字色から導く */
+      --bg: #252832; --text: #eeeef0; --accent: #b89558; --accent-text: #17130d;
+      --content-font: inherit; --content-size: 14px;
+      --surface: color-mix(in srgb, var(--bg), var(--text) 5%);
+      --surface-2: color-mix(in srgb, var(--bg), var(--text) 13%);
+      --surface-3: color-mix(in srgb, var(--bg), var(--text) 21%);
+      --border: color-mix(in srgb, var(--bg), var(--text) 18%);
+      --line: color-mix(in srgb, var(--bg), var(--text) 12%);
+      --muted: color-mix(in srgb, var(--text) 68%, var(--bg));
+      --faint: color-mix(in srgb, var(--text) 52%, var(--bg));
+      --input-bg: color-mix(in srgb, var(--bg), var(--text) 3%);
+      --input-border: var(--border);
+      --panel: var(--surface);
+      --source: color-mix(in srgb, #4d7cff 62%, var(--text));
+      --source-border: color-mix(in srgb, var(--source) 45%, var(--bg));
+      --role: color-mix(in srgb, #c9a86a 62%, var(--text));
+      --row-alt: color-mix(in srgb, var(--text) 3%, transparent);
+      --selected: color-mix(in srgb, var(--accent) 14%, transparent);
+      --shadow: rgb(0 0 0 / .45);
     }
     * { box-sizing: border-box; }
     body { margin: 0; color: var(--text); background: var(--bg); }
@@ -54,6 +60,7 @@
     [hidden] { display: none !important; }
     label { display: block; color: var(--faint); font-size: 12px; margin-bottom: 6px; }
     input, select { height: 34px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); padding: 6px 10px; font: inherit; font-size: 13px; }
+    input[type=radio], input[type=range] { height: auto; padding: 0; }
     .search-nav { display: flex; gap: 8px; }
     /* 一覧の上の絞り込み。まずは年月日 */
     .filter-bar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 6px 12px 14px; }
@@ -71,7 +78,7 @@
     .event-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
     .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
     .role { color: var(--role); text-transform: uppercase; letter-spacing: .08em; }
-    .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+    .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); }
     .empty { color: var(--faint); padding: 40px 0; }
     .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
     /* 設定(MrkDown と同じ作り: 左に項目、右に中身) */
@@ -90,8 +97,19 @@
     .opt-title:first-child { margin-top: 0; }
     .opt-row { display: flex; gap: 8px; flex-wrap: wrap; }
     .opt-row button.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); font-weight: 650; }
-    .swatch { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
-    .swatch.on { border-color: var(--text); }
+    .color-option { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .color-swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; background-clip: padding-box; }
+    .color-swatch.selected { border-color: var(--text); box-shadow: 0 0 0 1px var(--accent); }
+    .color-reset { padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); background: transparent; font-size: 11px; }
+    .color-reset.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+    .color-custom { position: relative; width: 22px; height: 22px; margin: 0; border-radius: 50%; overflow: hidden; border: 1px dashed var(--faint); cursor: pointer; }
+    .color-custom.selected { border: 2px solid var(--text); box-shadow: 0 0 0 1px var(--accent); }
+    .color-custom::after { content: '+'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text); font-size: 14px; pointer-events: none; }
+    .color-custom.has-value::after { content: ''; }
+    .color-custom input[type="color"] { position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px); padding: 0; border: none; background: none; cursor: pointer; }
+    .radio-row { display: flex; flex-direction: column; gap: 6px; }
+    .radio-row label { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 13px; }
+    .size-value { margin-bottom: 8px; font-size: 13px; }
     @media (max-width: 900px) {
       .timeline-pair-head, .timeline-pair-row { grid-template-columns: 1fr; }
       .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 0; }
@@ -105,7 +123,7 @@
       <button id="toggle-search" class="icon-button" type="button" data-i18n-title="search" aria-label="検索">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       </button>
-      <button id="settings-btn" class="icon-button" type="button" data-i18n-title="settings" aria-label="設定">
+      <button id="settings-btn" class="icon-button" type="button" data-i18n-title="settingsTip" aria-label="設定">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
@@ -140,15 +158,21 @@
       </div>
       <div class="settings-body">
         <nav class="settings-nav" role="tablist">
-          <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">配色・テーマ</button>
+          <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
           <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
         </nav>
         <div class="settings-content">
           <section class="settings-pane active" data-pane="appearance">
-            <div class="opt-title" data-i18n="theme">テーマ</div>
-            <div id="theme-option" class="opt-row"></div>
-            <div class="opt-title" data-i18n="accent">アクセントカラー</div>
-            <div id="accent-option" class="opt-row"></div>
+            <div class="opt-title" data-i18n="accentLabel">アクセントカラー</div>
+            <div id="accent-option" class="color-option"></div>
+            <div class="opt-title" data-i18n="bgLabel">背景色</div>
+            <div id="bg-option" class="color-option"></div>
+            <div class="opt-title" data-i18n="textLabel">文字色</div>
+            <div id="text-option" class="color-option"></div>
+            <div class="opt-title" data-i18n="fontLabel">本文フォント</div>
+            <div id="font-option" class="radio-row"></div>
+            <div class="opt-title" data-i18n="fontSizeLabel">本文サイズ</div>
+            <div id="fontsize-option"></div>
           </section>
           <section class="settings-pane" data-pane="lang">
             <div class="opt-title" data-i18n="language">表示する言語</div>
@@ -173,9 +197,9 @@
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
         updateAvail: (v) => `新しい版 ${v} があります`, updating: '更新しています…', updateFailed: (e) => `更新できませんでした: ${e}`,
-        navAppearance: '配色・テーマ', navLang: '言語', theme: 'テーマ', accent: 'アクセントカラー', language: '表示する言語',
-        themeSystem: 'システムに合わせる', themeDark: 'ダーク', themeLight: 'ライト', langSystem: 'システムに合わせる',
-        accentGold: 'ゴールド', accentIndigo: 'インディゴ', accentBlue: 'ブルー', accentGreen: 'グリーン', accentCoral: 'コーラル',
+        settingsTip: '設定（⌘,）', navAppearance: '外観', navLang: '言語', language: '表示する言語', langSystem: 'システムに従う',
+        accentLabel: 'アクセントカラー', bgLabel: '背景色', textLabel: '文字色', fontLabel: '本文フォント', fontSizeLabel: '本文サイズ',
+        colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
       },
       en: {
         search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
@@ -183,24 +207,58 @@
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
         updateAvail: (v) => `Version ${v} is available`, updating: 'Updating…', updateFailed: (e) => `Update failed: ${e}`,
-        navAppearance: 'Appearance', navLang: 'Language', theme: 'Theme', accent: 'Accent color', language: 'Display language',
-        themeSystem: 'Match system', themeDark: 'Dark', themeLight: 'Light', langSystem: 'Match system',
-        accentGold: 'Gold', accentIndigo: 'Indigo', accentBlue: 'Blue', accentGreen: 'Green', accentCoral: 'Coral',
+        settingsTip: 'Settings (⌘,)', navAppearance: 'Appearance', navLang: 'Language', language: 'Display language', langSystem: 'Match system',
+        accentLabel: 'Accent color', bgLabel: 'Background', textLabel: 'Text color', fontLabel: 'Content font', fontSizeLabel: 'Content size',
+        colorSystem: 'System', colorDefault: 'Default', colorCustom: 'Custom…', fontSystem: 'System (SF)', fontSerif: 'Serif', fontRounded: 'Rounded',
       },
     };
-    const ACCENTS = { gold: '#b89558', indigo: '#6a55d6', blue: '#3f6df0', green: '#1f9d68', coral: '#ff6b6b' };
-    const ACCENT_TEXT = { gold: '#17130d', indigo: '#ffffff', blue: '#ffffff', green: '#ffffff', coral: '#2a0d0d' };
-    const defaults = { theme: 'system', accent: 'gold', lang: 'system' };
+    // 見た目の設定。空('')は「既定」(CSS の値をそのまま使う)。MrkDown の「外観」と同じ項目
+    const ACCENT_PRESETS = ['#007aff', '#bf5af2', '#ff2d55', '#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#8e8e93'];
+    const BG_PRESETS = ['#1e1e1e', '#000000', '#282c34', '#f4ecd8', '#ffffff'];
+    const TEXT_PRESETS = ['#d4d4d4', '#ffffff', '#c9d1d9', '#5b4636', '#24292f'];
+    const FONTS = [
+      ['system', 'fontSystem', ''],
+      ['serif', 'fontSerif', "'New York', 'Iowan Old Style', Georgia, 'Times New Roman', serif"],
+      ['rounded', 'fontRounded', "'SF Pro Rounded', ui-rounded, 'Hiragino Maru Gothic ProN', -apple-system, sans-serif"],
+    ];
+    const SIZE = { min: 12, max: 22, def: 14 };
+    const SYSTEM_ACCENT = 'AccentColor';
+    const defaults = { accent: '', bg: '', text: '', font: 'system', size: SIZE.def, lang: 'system' };
+    const isColor = (v) => v === SYSTEM_ACCENT || /^#[0-9a-f]{6}$/i.test(v || '');
+    function sanitize(raw) {
+      const v = { ...defaults, ...raw };
+      for (const k of ['accent', 'bg', 'text']) if (v[k] && !isColor(v[k])) v[k] = '';
+      if (!FONTS.some(([id]) => id === v.font)) v.font = 'system';
+      v.size = Math.min(SIZE.max, Math.max(SIZE.min, Number(v.size) || SIZE.def));
+      if (!['system', 'ja', 'en'].includes(v.lang)) v.lang = 'system';
+      return v;
+    }
     let settings = { ...defaults };
-    try { settings = { ...defaults, ...JSON.parse(localStorage.getItem('synclane-settings') || '{}') }; } catch (_) {}
+    try { settings = sanitize(JSON.parse(localStorage.getItem('synclane-settings') || '{}')); } catch (_) {}
     const resolvedLang = () => settings.lang === 'system' ? ((navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en') : settings.lang;
     const t = (key, ...args) => { const v = I18N[resolvedLang()][key]; return typeof v === 'function' ? v(...args) : v; };
-    const dark = matchMedia('(prefers-color-scheme: dark)');
-    function applyTheme() {
-      const root = document.documentElement;
-      root.dataset.resolved = settings.theme === 'system' ? (dark.matches ? 'dark' : 'light') : settings.theme;
-      root.style.setProperty('--accent', ACCENTS[settings.accent] || ACCENTS.gold);
-      root.style.setProperty('--accent-text', ACCENT_TEXT[settings.accent] || ACCENT_TEXT.gold);
+    // 色の上に載せる文字は、明るさで白か黒を選ぶ
+    function readableOn(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+      return lum > 0.6 ? '#17130d' : '#ffffff';
+    }
+    function setVar(name, value) {
+      if (value) document.documentElement.style.setProperty(name, value);
+      else document.documentElement.style.removeProperty(name);
+    }
+    function applyAppearance() {
+      const accent = settings.accent;
+      setVar('--accent', accent);
+      setVar('--accent-text', accent === SYSTEM_ACCENT ? 'AccentColorText' : accent ? readableOn(accent) : '');
+      setVar('--bg', settings.bg);
+      setVar('--text', settings.text);
+      const font = FONTS.find(([id]) => id === settings.font);
+      setVar('--content-font', font ? font[2] : '');
+      setVar('--content-size', settings.size === SIZE.def ? '' : `${settings.size}px`);
+      // 背景が明るければ、フォームやスクロールバーも明るい配色にする
+      const bg = settings.bg || '#252832';
+      document.documentElement.style.colorScheme = readableOn(bg) === '#ffffff' ? 'light' : 'dark';
     }
     function applyLang() {
       document.documentElement.lang = resolvedLang();
@@ -212,29 +270,77 @@
     }
     function saveSettings() {
       try { localStorage.setItem('synclane-settings', JSON.stringify(settings)); } catch (_) {}
-      applyTheme(); applyLang();
+      applyAppearance(); applyLang();
     }
-    dark.addEventListener('change', applyTheme);
+    function colorOption(container, key, presets, withSystem) {
+      const current = settings[key];
+      container.innerHTML = '';
+      const pick = (value) => { settings[key] = value; saveSettings(); };
+      const chip = (label, on, value) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'color-reset' + (on ? ' selected' : ''); b.textContent = label;
+        b.addEventListener('click', () => pick(value));
+        container.appendChild(b);
+      };
+      chip(t('colorDefault'), current === '', '');
+      if (withSystem && CSS.supports('color', 'AccentColor')) chip(t('colorSystem'), current === SYSTEM_ACCENT, SYSTEM_ACCENT);
+      for (const c of presets) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'color-swatch' + (current.toLowerCase() === c ? ' selected' : '');
+        b.style.background = c; b.title = c; b.setAttribute('aria-label', c);
+        b.addEventListener('click', () => pick(c));
+        container.appendChild(b);
+      }
+      const custom = current !== '' && current !== SYSTEM_ACCENT && !presets.includes(current.toLowerCase());
+      const wrap = document.createElement('label');
+      wrap.className = 'color-custom' + (custom ? ' selected has-value' : ''); wrap.title = t('colorCustom');
+      const input = document.createElement('input');
+      input.type = 'color'; input.value = isColor(current) && current !== SYSTEM_ACCENT ? current : '#888888';
+      if (custom) wrap.style.background = current;
+      input.addEventListener('change', () => pick(input.value));
+      wrap.appendChild(input);
+      container.appendChild(wrap);
+    }
+    function renderSettingsOptions() {
+      colorOption($('accent-option'), 'accent', ACCENT_PRESETS, true);
+      colorOption($('bg-option'), 'bg', BG_PRESETS, false);
+      colorOption($('text-option'), 'text', TEXT_PRESETS, false);
+      $('font-option').innerHTML = '';
+      for (const [id, key] of FONTS) {
+        const label = document.createElement('label');
+        const radio = document.createElement('input');
+        radio.type = 'radio'; radio.name = 'content-font'; radio.checked = settings.font === id;
+        radio.addEventListener('change', () => { settings.font = id; saveSettings(); });
+        const name = document.createElement('span'); name.textContent = t(key);
+        label.append(radio, name);
+        $('font-option').appendChild(label);
+      }
+      $('fontsize-option').innerHTML = '';
+      const value = document.createElement('div'); value.className = 'size-value'; value.textContent = `${settings.size}px`;
+      const slider = document.createElement('input');
+      slider.type = 'range'; slider.min = SIZE.min; slider.max = SIZE.max; slider.step = 1; slider.value = settings.size;
+      // つまみを動かしている間は、設定画面を組み直さない(掴んだまま外れるため)
+      slider.addEventListener('input', () => {
+        settings.size = Number(slider.value); value.textContent = `${settings.size}px`;
+        try { localStorage.setItem('synclane-settings', JSON.stringify(settings)); } catch (_) {}
+        applyAppearance();
+      });
+      $('fontsize-option').append(value, slider);
+      optionButtons($('lang-option'), [['system', t('langSystem')], ['ja', '日本語'], ['en', 'English']], settings.lang, (v) => { settings.lang = v; saveSettings(); });
+    }
     function optionButtons(container, items, current, onPick) {
       container.innerHTML = '';
-      for (const [value, label, color] of items) {
+      for (const [value, label] of items) {
         const b = document.createElement('button');
-        b.type = 'button';
-        if (color) { b.className = 'swatch' + (value === current ? ' on' : ''); b.style.background = color; b.title = label; b.setAttribute('aria-label', label); }
-        else { b.textContent = label; if (value === current) b.className = 'on'; }
+        b.type = 'button'; b.textContent = label; if (value === current) b.className = 'on';
         b.addEventListener('click', () => onPick(value));
         container.appendChild(b);
       }
     }
-    function renderSettingsOptions() {
-      optionButtons($('theme-option'), [['system', t('themeSystem')], ['dark', t('themeDark')], ['light', t('themeLight')]], settings.theme, (v) => { settings.theme = v; saveSettings(); });
-      optionButtons($('accent-option'), Object.entries(ACCENTS).map(([k, c]) => [k, t('accent' + k[0].toUpperCase() + k.slice(1)), c]), settings.accent, (v) => { settings.accent = v; saveSettings(); });
-      optionButtons($('lang-option'), [['system', t('langSystem')], ['ja', '日本語'], ['en', 'English']], settings.lang, (v) => { settings.lang = v; saveSettings(); });
-    }
     // 検索ウィンドウなど、別のウィンドウで設定を変えたときも追従する
     window.addEventListener('storage', (event) => {
       if (event.key !== 'synclane-settings' || !event.newValue) return;
-      try { settings = { ...defaults, ...JSON.parse(event.newValue) }; applyTheme(); applyLang(); } catch (_) {}
+      try { settings = sanitize(JSON.parse(event.newValue)); applyAppearance(); applyLang(); } catch (_) {}
     });
     document.querySelectorAll('.settings-nav-item').forEach((btn) => btn.addEventListener('click', () => {
       document.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.toggle('active', b === btn));
@@ -350,7 +456,10 @@
     }
     $('toggle-search').addEventListener('click', () => { if (!isSearchWindow) openSearchWindow(); });
     document.addEventListener('keydown', (event) => {
-      if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
+      if (!isSearchWindow && event.metaKey && !event.shiftKey && !event.altKey && event.key === ',') {
+        event.preventDefault();
+        $('settings-overlay').hidden = !$('settings-overlay').hidden;
+      } else if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
         event.preventDefault();
         openSearchWindow();
       } else if (event.key === 'Escape') {
@@ -416,7 +525,7 @@
         console.error('更新の確認に失敗しました', error);
       }
     }
-    applyTheme();
+    applyAppearance();
     updateDateFields();
     applyLang();
     if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
