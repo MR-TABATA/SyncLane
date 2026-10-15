@@ -1,5 +1,7 @@
 # SyncLane
 
+日本語 | [English](README.en.md)
+
 Claude Code などのAIとの会話を、自分のPCに保存して、あとから検索できるアプリ(macOS)。保存先はPCの中のSQLiteだけで、外のサーバーには送りません。
 
 - キーワードや日付で、過去の会話を探せる
