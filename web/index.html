@@ -120,6 +120,9 @@
   <header>
   <div class="toolbar">
     <div class="header-icons">
+      <button id="reload-btn" class="icon-button" type="button" data-i18n-title="reload" aria-label="再読み込み">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      </button>
       <button id="toggle-search" class="icon-button" type="button" data-i18n-title="search" aria-label="検索">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       </button>
@@ -192,7 +195,7 @@
     // ---- 言語 ----
     const I18N = {
       ja: {
-        search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
+        reload: '再読み込み', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
         from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
@@ -202,7 +205,7 @@
         colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
       },
       en: {
-        search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
+        reload: 'Reload', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
         from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
@@ -496,6 +499,8 @@
     $('date-mode').addEventListener('change', updateDateFields);
     $('refresh').addEventListener('click', () => { isSearchWindow ? publishSearch() : load().catch(() => {}); });
     $('query').addEventListener('keydown', (event) => { if (event.key === 'Enter') isSearchWindow ? publishSearch() : load().catch(() => {}); });
+    // 一覧は自動では変わらない。新しい会話を見たいときに、本人が押す
+    $('reload-btn').addEventListener('click', () => load().catch(() => {}));
     $('previous').addEventListener('click', () => moveSearch(-1));
     $('next').addEventListener('click', () => moveSearch(1));
     $('filter-apply').addEventListener('click', () => { searchActive = false; load().catch(() => {}); });
@@ -529,8 +534,6 @@
     updateDateFields();
     applyLang();
     if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
-    // 収集役が新しい会話を取り込んだら、メイン画面の一覧を最新にする
-    if (!isSearchWindow) window.__TAURI__?.event?.listen('events-updated', () => load().catch(() => {}));
     if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">${t('loadFailed')}${escapeHtml(String(err))}</div>`; });
   </script>
 </body>
