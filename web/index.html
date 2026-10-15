@@ -81,6 +81,7 @@
     .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
     .role { color: var(--role); letter-spacing: .08em; }
     .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); }
+    .event-meta .title { color: var(--text); font-weight: 600; }
     .empty { color: var(--faint); padding: 40px 0; }
     .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
     /* 設定(MrkDown と同じ作り: 左に項目、右に中身) */
@@ -435,7 +436,7 @@
       $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>${roleLabel('USER')}</div><div>${roleLabel('ASSISTANT')}</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
       if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
     }
-    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
+    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
     function updateSearchNav() {
       $('previous').disabled = selectedResult <= 0;
       $('next').disabled = selectedResult < 0 || selectedResult >= searchResults.length - 1;

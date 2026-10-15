@@ -62,11 +62,13 @@ fn collect_claude_file(
     let mut project_path = String::new();
     let mut session_key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
     let mut rows = Vec::new();
+    let mut title: Option<String> = None;
     for (line_index, line) in text.lines().enumerate() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             report.skipped_lines += 1;
             continue;
         };
+        if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() { project_path = cwd.to_string(); }
         }
@@ -92,6 +94,7 @@ fn collect_claude_file(
             report.events += inserted;
         }
     }
+    if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     if next_offset != saved_offset {
         tx.execute(
             "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
@@ -248,6 +251,7 @@ fn import_file(
         .unwrap_or("unknown")
         .to_string();
     let mut rows = Vec::new();
+    let mut title: Option<String> = None;
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line?;
@@ -255,6 +259,7 @@ fn import_file(
             report.skipped_lines += 1;
             continue;
         };
+        if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() {
                 project_path = cwd.to_string();
@@ -300,7 +305,59 @@ fn import_file(
         )?;
         report.events += inserted;
     }
+    if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     Ok(true)
+}
+
+/// Claude Code がセッションに付ける題名(`{"type":"ai-title","aiTitle":"..."}`)。
+fn ai_title(value: &Value) -> Option<String> {
+    if value.get("type")?.as_str()? != "ai-title" { return None; }
+    let title = value.get("aiTitle")?.as_str()?.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
+fn set_title(tx: &rusqlite::Transaction<'_>, source_file: &str, title: &str) -> Result<()> {
+    tx.execute(
+        "UPDATE sessions SET title = ?3 WHERE source_tool = ?1 AND source_file = ?2 AND COALESCE(title, '') <> ?3",
+        params![CLAUDE_TOOL, source_file, title],
+    )?;
+    Ok(())
+}
+
+/// 題名の無いセッションに、ログから題名を入れる(題名の対応より前に取り込んだ分の補完)。
+/// 増分の収集は読み済みの位置から先しか読まないため、別に走らせる。返り値は題名を入れた件数。
+pub fn backfill_claude_titles(root: &Path, conn: &mut Connection) -> Result<usize> {
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let tx = conn.transaction()?;
+    let mut updated = 0;
+    for path in files {
+        let source_file = path.to_string_lossy().into_owned();
+        let needs: bool = tx
+            .query_row(
+                "SELECT 1 FROM sessions WHERE source_tool = ?1 AND source_file = ?2 AND title IS NULL",
+                params![CLAUDE_TOOL, source_file],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !needs { continue; }
+        let Ok(file) = File::open(&path) else { continue; };
+        let mut title: Option<String> = None;
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break; };
+            if !line.contains("\"ai-title\"") { continue; }
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if let Some(found) = ai_title(&value) { title = Some(found); }
+            }
+        }
+        if let Some(title) = title {
+            set_title(&tx, &source_file, &title)?;
+            updated += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(updated)
 }
 
 fn find_or_create_session(
@@ -402,6 +459,36 @@ mod tests {
         let second = import_claude(&temp, Some("2026-10-13"), &mut conn)?;
         assert_eq!(second.events, 0);
         assert_eq!(db::counts(&conn)?.sessions, 1);
+
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn saves_session_title_and_backfills_and_searches_by_it() -> Result<()> {
+        let temp = tempfile_dir();
+        let path = temp.join("session.jsonl");
+        let mut file = File::create(&path)?;
+        writeln!(file, r#"{{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-13T01:00:00Z","cwd":"/tmp/project","message":{{"content":"調べる"}}}}"#)?;
+        writeln!(file, r#"{{"type":"ai-title","aiTitle":"Rename the app","sessionId":"s1"}}"#)?;
+        writeln!(file, r#"{{"type":"ai-title","aiTitle":"Rename app to SyncLane","sessionId":"s1"}}"#)?;
+
+        // 増分の収集: 最後の題名が入る
+        let mut conn = db::open_memory()?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        let title = |conn: &Connection| -> Result<Option<String>> {
+            Ok(conn.query_row("SELECT title FROM sessions", [], |row| row.get(0))?)
+        };
+        assert_eq!(title(&conn)?.as_deref(), Some("Rename app to SyncLane"));
+        let found = db::timeline(&conn, None, Some("synclane"), 10)?;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title.as_deref(), Some("Rename app to SyncLane"));
+
+        // 題名の対応より前に取り込んだ想定: 題名を消してから補完する
+        conn.execute("UPDATE sessions SET title = NULL", [])?;
+        assert_eq!(backfill_claude_titles(&temp, &mut conn)?, 1);
+        assert_eq!(title(&conn)?.as_deref(), Some("Rename app to SyncLane"));
+        assert_eq!(backfill_claude_titles(&temp, &mut conn)?, 0);
 
         std::fs::remove_dir_all(temp)?;
         Ok(())

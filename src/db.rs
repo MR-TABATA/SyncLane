@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_versions (
@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS collector_files (
 );
 "#;
 
+// セッションの題名(Claude Code が付ける ai-title)。無いツールは NULL
+const MIGRATION_3: &str = "ALTER TABLE sessions ADD COLUMN title TEXT;";
+
 pub fn default_db_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("SYNCLANE_DB") {
         return Ok(PathBuf::from(path));
@@ -160,6 +163,16 @@ fn migrate(conn: &Connection) -> Result<()> {
             params![2],
         )?;
         tx.commit()?;
+        current = 2;
+    }
+    if current < 3 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_3)?;
+        tx.execute(
+            "INSERT INTO schema_versions(version) VALUES (?1)",
+            params![3],
+        )?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -178,6 +191,7 @@ pub struct TimelineEvent {
     pub occurred_at: String,
     pub source_tool: String,
     pub project_path: String,
+    pub title: Option<String>,
     pub role: String,
     pub content: String,
 }
@@ -209,7 +223,7 @@ pub fn timeline_range(
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
     let mut sql = String::from(
-        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title
          FROM events e
          JOIN sessions s ON s.id = e.session_id",
     );
@@ -226,7 +240,7 @@ pub fn timeline_range(
         conditions.push("e.occurred_at < ?".to_owned());
     }
     for _ in &terms {
-        conditions.push("(INSTR(LOWER(e.content), LOWER(?)) > 0 OR INSTR(LOWER(s.project_path), LOWER(?)) > 0)".to_owned());
+        conditions.push("(INSTR(LOWER(e.content), LOWER(?)) > 0 OR INSTR(LOWER(s.project_path), LOWER(?)) > 0 OR INSTR(LOWER(COALESCE(s.title, '')), LOWER(?)) > 0)".to_owned());
     }
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
@@ -243,8 +257,9 @@ pub fn timeline_range(
         values.push(Box::new(day_bound(date)));
     }
     for term in &terms {
-        values.push(Box::new((*term).to_owned()));
-        values.push(Box::new((*term).to_owned()));
+        for _ in 0..3 {
+            values.push(Box::new((*term).to_owned()));
+        }
     }
     values.push(Box::new(limit as i64));
     let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_timeline_event)?;
@@ -259,6 +274,7 @@ fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEv
         project_path: row.get(3)?,
         role: row.get(4)?,
         content: row.get(5)?,
+        title: row.get(6)?,
     })
 }
 
