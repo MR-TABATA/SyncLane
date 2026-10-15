@@ -191,6 +191,16 @@ pub fn timeline(
     timeline_range(conn, date, None, query, limit)
 }
 
+/// 日付(YYYY-MM-DD)は、その日の0時(UTC)として扱う。時刻つき(…T…Z)ならそのまま使う。
+/// 画面はローカルの日付で絞るので、ローカルの0時をUTCにした時刻が渡ってくる。
+fn day_bound(value: &str) -> String {
+    if value.contains('T') {
+        value.to_owned()
+    } else {
+        format!("{value}T00:00:00")
+    }
+}
+
 pub fn timeline_range(
     conn: &Connection,
     date_from: Option<&str>,
@@ -210,10 +220,10 @@ pub fn timeline_range(
         .collect();
     let mut conditions: Vec<String> = Vec::new();
     if date_from.is_some() {
-        conditions.push("e.occurred_at >= (? || 'T00:00:00')".to_owned());
+        conditions.push("e.occurred_at >= ?".to_owned());
     }
     if date_to.is_some() {
-        conditions.push("e.occurred_at < (? || 'T00:00:00')".to_owned());
+        conditions.push("e.occurred_at < ?".to_owned());
     }
     for _ in &terms {
         conditions.push("(INSTR(LOWER(e.content), LOWER(?)) > 0 OR INSTR(LOWER(s.project_path), LOWER(?)) > 0)".to_owned());
@@ -227,10 +237,10 @@ pub fn timeline_range(
     let mut stmt = conn.prepare(&sql)?;
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(date) = date_from {
-        values.push(Box::new(date.to_owned()));
+        values.push(Box::new(day_bound(date)));
     }
     if let Some(date) = date_to {
-        values.push(Box::new(date.to_owned()));
+        values.push(Box::new(day_bound(date)));
     }
     for term in &terms {
         values.push(Box::new((*term).to_owned()));

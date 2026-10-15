@@ -5,60 +5,93 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SyncLane</title>
   <style>
-    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
+    :root {
+      color-scheme: dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+      --bg: #252832; --surface: #2c303a; --surface-2: #454852; --surface-3: #555966; --border: #4c515f;
+      --text: #eeeef0; --muted: #a6a8b0; --faint: #92958f; --input-bg: #1d1f1d; --input-border: #454941;
+      --accent: #b89558; --accent-text: #17130d; --source: #7ea4ff; --source-border: #3d5c9c; --role: #c9a86a;
+      --row-alt: rgb(255 255 255 / .025); --selected: rgb(111 150 255 / .10); --line: #3e434f;
+      --shadow: rgb(0 0 0 / .45); --panel: #1b1d1b;
+    }
+    :root[data-resolved="light"] {
+      color-scheme: light;
+      --bg: #f5f6f8; --surface: #ffffff; --surface-2: #eceef2; --surface-3: #dfe2e8; --border: #cfd3db;
+      --text: #1f2330; --muted: #5d6475; --faint: #7b8191; --input-bg: #ffffff; --input-border: #c3c8d2;
+      --source: #2f5bd6; --source-border: #a9bdf0; --role: #8a6a2b;
+      --row-alt: rgb(0 0 0 / .025); --selected: rgb(47 91 214 / .08); --line: #dfe2e8;
+      --shadow: rgb(0 0 0 / .18); --panel: #ffffff;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; color: #eeeef0; background: #292b34; }
-    header { position: fixed; inset: 0 0 auto; z-index: 20; display: block; height: 58px; border-bottom: 1px solid #4c515f; background: #2c303a; box-shadow: 0 6px 18px rgb(0 0 0 / .16); }
-    .brand { display: none; }
-    .brand span { color: #c9a86a; }
-    .subtle { color: #92958f; font-size: 12px; }
-    header > .subtle { display: none; }
+    body { margin: 0; color: var(--text); background: var(--bg); }
+    header { position: fixed; inset: 0 0 auto; z-index: 20; height: 58px; border-bottom: 1px solid var(--border); background: var(--surface); box-shadow: 0 6px 18px rgb(0 0 0 / .16); }
     main { display: block; margin-top: 58px; }
-    section { min-width: 0; padding: 30px 38px 60px; background: #252832; }
-    .toolbar { position: absolute; top: 0; right: 0; left: 0; z-index: 30; height: 58px; padding: 9px 18px; background: #2c303a; }
-    .header-icons { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .header-leading, .header-trailing { display: flex; align-items: center; gap: 8px; }
-    .icon-button { width: 40px; height: 40px; padding: 0; border-radius: 9px; color: #eeeef0; background: #454852; border-color: #5b5e68; font-size: 22px; line-height: 1; }
-    .search-panel { position: fixed; top: 76px; right: 32px; z-index: 50; display: none; width: min(720px, calc(100vw - 64px)); padding: 0; border: 1px solid #454941; border-radius: 10px; background: #1b1d1b; box-shadow: 0 18px 42px rgb(0 0 0 / .45); }
+    section.page { min-width: 0; padding: 14px 38px 60px; background: var(--bg); }
+    .toolbar { position: absolute; top: 0; right: 0; left: 0; z-index: 30; height: 58px; padding: 9px 16px; background: var(--surface); }
+    .header-icons { display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 100%; }
+    /* ボタンの形・大きさ・並びは MrkDown と同じ(余白 6px 12px、角丸 6px、間隔 8px、アイコン 14〜15px) */
+    button { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-2); font: inherit; font-size: 13px; cursor: pointer; }
+    button:hover:not(:disabled) { background: var(--surface-3); }
+    button:disabled { cursor: default; opacity: .3; }
+    button.primary { color: var(--accent-text); background: var(--accent); border-color: var(--accent); font-weight: 650; }
+    button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+    .icon-button svg { display: block; }
+    .search-panel { position: fixed; top: 76px; right: 32px; z-index: 50; display: none; width: min(720px, calc(100vw - 64px)); border: 1px solid var(--input-border); border-radius: 10px; background: var(--panel); box-shadow: 0 18px 42px var(--shadow); }
     body.search-open .search-panel { display: block; }
-    body.search-window { min-width: 600px; background: #1b1d1b; }
-    body.search-window header { position: static; display: block; height: auto; border: 0; background: #1b1d1b; }
-    body.search-window main { display: none; }
-    body.search-window .toolbar { position: static; height: auto; padding: 0; background: #1b1d1b; }
+    body.search-window { min-width: 600px; background: var(--panel); }
+    body.search-window header { position: static; display: block; height: auto; border: 0; background: var(--panel); box-shadow: none; }
+    body.search-window main, body.search-window .filter-bar { display: none; }
+    body.search-window .toolbar { position: static; height: auto; padding: 0; background: var(--panel); }
     body.search-window .header-icons { display: none; }
     body.search-window .search-panel { position: static; display: block; width: 100%; border: 0; border-radius: 0; box-shadow: none; }
     .search-panel-body { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 14px; }
     body.search-open.date-expanded .search-panel-body { row-gap: 10px; }
-    .search-panel .field { display: flex; flex-direction: column; }
+    .field { display: flex; flex-direction: column; }
     .search-panel #query { width: 360px; }
     .search-panel #range-from, .search-panel #range-to, .search-panel #around-date { width: 150px; }
     .search-panel #around-days { width: 76px; }
-    .search-panel .date-range, .search-panel .around-range { display: flex; gap: 8px; align-items: end; }
-    .search-panel [hidden] { display: none !important; }
-    label { display: block; color: #92958f; font-size: 12px; margin-bottom: 6px; }
-    input, select, button { height: 42px; border: 1px solid #454941; border-radius: 7px; color: #e8e7e2; background: #1d1f1d; padding: 9px 11px; font: inherit; }
-    #query { width: 360px; }
-    button { cursor: pointer; background: #b89558; border-color: #b89558; color: #17130d; font-weight: 650; }
-    button:disabled { cursor: default; opacity: .45; }
+    .date-range, .around-range { display: flex; gap: 8px; align-items: end; }
+    [hidden] { display: none !important; }
+    label { display: block; color: var(--faint); font-size: 12px; margin-bottom: 6px; }
+    input, select { height: 34px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); padding: 6px 10px; font: inherit; font-size: 13px; }
     .search-nav { display: flex; gap: 8px; }
-    .search-nav button { background: #262a28; border-color: #454941; color: #e8e7e2; }
+    /* 一覧の上の絞り込み。まずは年月日 */
+    .filter-bar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 6px 12px 14px; }
+    .filter-bar .field { min-width: 0; }
+    .filter-bar input { width: 150px; }
     .timeline-pairs { display: flex; flex-direction: column; }
     .timeline-pair-head, .timeline-pair-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-    .timeline-pair-head { position: sticky; top: 58px; z-index: 2; color: #a6a8b0; background: #252832; font-size: 11px; font-weight: 600; letter-spacing: .14em; }
+    .timeline-pair-head { position: sticky; top: 58px; z-index: 2; color: var(--muted); background: var(--bg); font-size: 11px; font-weight: 600; letter-spacing: .14em; }
     .timeline-pair-head > div { padding: 8px 12px; }
-    .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 1px solid #3e434f; }
-    .timeline-pair-row:nth-child(even) { background: rgb(255 255 255 / .025); }
+    .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 1px solid var(--line); }
+    .timeline-pair-row:nth-child(even) { background: var(--row-alt); }
     .timeline-pair-row > .event { min-width: 0; }
-    .event { scroll-margin-top: 155px; padding: 17px 12px; border-top: 1px solid #3e434f; }
-    .event.selected { background: rgb(111 150 255 / .10); }
-    .event-meta { display: flex; gap: 10px; align-items: center; color: #a6a8b0; font-size: 12px; }
-    .source { color: #7ea4ff; border: 1px solid #3d5c9c; border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
-    .role { color: #c9a86a; text-transform: uppercase; letter-spacing: .08em; }
+    .event { scroll-margin-top: 155px; padding: 17px 12px; border-top: 1px solid var(--line); }
+    .event.selected { background: var(--selected); }
+    .event-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+    .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+    .role { color: var(--role); text-transform: uppercase; letter-spacing: .08em; }
     .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
-    .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid #5b5e68; border-radius: 10px; background: #2c303a; box-shadow: 0 10px 28px rgb(0 0 0 / .4); font-size: 13px; }
-    .update-bar[hidden] { display: none; }
-    .update-bar button { height: 32px; padding: 4px 12px; }
-    .empty { color: #92958f; padding: 40px 0; }
+    .empty { color: var(--faint); padding: 40px 0; }
+    .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
+    /* 設定(MrkDown と同じ作り: 左に項目、右に中身) */
+    .overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / .45); }
+    .settings-panel { display: flex; flex-direction: column; width: min(640px, calc(100vw - 48px)); height: min(440px, calc(100vh - 48px)); border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 18px 42px var(--shadow); overflow: hidden; }
+    .settings-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    .settings-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .settings-body { display: flex; flex: 1; min-height: 0; }
+    .settings-nav { display: flex; flex-direction: column; gap: 2px; width: 150px; padding: 12px 8px; border-right: 1px solid var(--border); }
+    .settings-nav-item { border: 0; background: transparent; color: var(--muted); }
+    .settings-nav-item.active { background: var(--surface-3); color: var(--text); font-weight: 600; }
+    .settings-content { flex: 1; min-width: 0; padding: 16px 20px; overflow-y: auto; }
+    .settings-pane { display: none; }
+    .settings-pane.active { display: block; }
+    .opt-title { margin: 14px 0 6px; font-size: 11px; color: var(--faint); }
+    .opt-title:first-child { margin-top: 0; }
+    .opt-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .opt-row button.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); font-weight: 650; }
+    .swatch { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+    .swatch.on { border-color: var(--text); }
     @media (max-width: 900px) {
       .timeline-pair-head, .timeline-pair-row { grid-template-columns: 1fr; }
       .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 0; }
@@ -68,74 +101,208 @@
 <body>
   <header>
   <div class="toolbar">
-    <div class="header-icons"><div class="header-leading"></div><div class="header-trailing"><button id="toggle-search" class="icon-button" type="button" aria-label="検索" title="検索（⌘F）">⌕</button></div></div>
+    <div class="header-icons">
+      <button id="toggle-search" class="icon-button" type="button" data-i18n-title="search" aria-label="検索">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      </button>
+      <button id="settings-btn" class="icon-button" type="button" data-i18n-title="settings" aria-label="設定">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
     <div class="search-panel">
       <div class="search-panel-body">
-      <div class="field"><label for="date-mode">日付条件</label><select id="date-mode"><option value="range">期間指定</option><option value="around">この頃（前後）</option></select></div>
-      <div id="range-fields" class="date-range"><div class="field"><label for="range-from">開始</label><input id="range-from" type="date" /></div><div class="field"><label for="range-to">終了</label><input id="range-to" type="date" /></div></div>
-      <div id="around-fields" class="around-range" hidden><div class="field"><label for="around-date">基準日</label><input id="around-date" type="date" /></div><div class="field"><label for="around-days">前後（日）</label><input id="around-days" type="number" min="0" max="365" value="5" /></div></div>
-      <div class="field"><label for="query">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: SyncLane SQLite" /></div>
-      <button id="refresh">表示</button>
-      <div class="search-nav"><button id="previous" type="button" disabled>前を検索</button><button id="next" type="button" disabled>次を検索</button></div>
+      <div class="field"><label for="date-mode" data-i18n="dateMode">日付条件</label><select id="date-mode"><option value="range" data-i18n="modeRange">期間指定</option><option value="around" data-i18n="modeAround">この頃（前後）</option></select></div>
+      <div id="range-fields" class="date-range"><div class="field"><label for="range-from" data-i18n="from">開始</label><input id="range-from" type="date" /></div><div class="field"><label for="range-to" data-i18n="to">終了</label><input id="range-to" type="date" /></div></div>
+      <div id="around-fields" class="around-range" hidden><div class="field"><label for="around-date" data-i18n="aroundDate">基準日</label><input id="around-date" type="date" /></div><div class="field"><label for="around-days" data-i18n="aroundDays">前後（日）</label><input id="around-days" type="number" min="0" max="365" value="5" /></div></div>
+      <div class="field"><label for="query" data-i18n="keyword">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: SyncLane SQLite" data-i18n-placeholder="keywordExample" /></div>
+      <button id="refresh" class="primary" data-i18n="show">表示</button>
+      <div class="search-nav"><button id="previous" type="button" disabled data-i18n="prev">前を検索</button><button id="next" type="button" disabled data-i18n="next">次を検索</button></div>
       </div>
     </div>
   </div></header>
   <main>
-    <section><div id="timeline"><div class="empty">読み込み中…</div></div></section>
+    <section class="page">
+      <div class="filter-bar">
+        <div class="field"><label for="filter-from" data-i18n="from">開始</label><input id="filter-from" type="date" /></div>
+        <div class="field"><label for="filter-to" data-i18n="to">終了</label><input id="filter-to" type="date" /></div>
+        <button id="filter-apply" class="primary" type="button" data-i18n="show">表示</button>
+        <button id="filter-clear" type="button" data-i18n="clear">クリア</button>
+      </div>
+      <div id="timeline"><div class="empty" data-i18n="loading">読み込み中…</div></div>
+    </section>
   </main>
-  <div id="update-bar" class="update-bar" hidden><span id="update-text"></span><button id="update-run" type="button">更新して再起動</button></div>
+  <div id="update-bar" class="update-bar" hidden><span id="update-text"></span><button id="update-run" class="primary" type="button" data-i18n="updateRun">更新して再起動</button></div>
+  <div id="settings-overlay" class="overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-labelledby="settings-title">
+      <div class="settings-head">
+        <h2 id="settings-title" data-i18n="settings">設定</h2>
+        <button id="settings-close" type="button" data-i18n-title="close" aria-label="閉じる"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+      </div>
+      <div class="settings-body">
+        <nav class="settings-nav" role="tablist">
+          <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">配色・テーマ</button>
+          <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
+        </nav>
+        <div class="settings-content">
+          <section class="settings-pane active" data-pane="appearance">
+            <div class="opt-title" data-i18n="theme">テーマ</div>
+            <div id="theme-option" class="opt-row"></div>
+            <div class="opt-title" data-i18n="accent">アクセントカラー</div>
+            <div id="accent-option" class="opt-row"></div>
+          </section>
+          <section class="settings-pane" data-pane="lang">
+            <div class="opt-title" data-i18n="language">表示する言語</div>
+            <div id="lang-option" class="opt-row"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
     const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INTERNALS__?.invoke;
     const isSearchWindow = location.hash === '#search';
     if (isSearchWindow) document.body.classList.add('search-window');
     const $ = (id) => document.getElementById(id);
     const short = (text) => text.length > 800 ? text.slice(0, 800) + "…" : text;
-    let searchResults = [];
-    let selectedResult = -1;
+
+    // ---- 言語 ----
+    const I18N = {
+      ja: {
+        search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
+        from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
+        show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
+        needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
+        updateAvail: (v) => `新しい版 ${v} があります`, updating: '更新しています…', updateFailed: (e) => `更新できませんでした: ${e}`,
+        navAppearance: '配色・テーマ', navLang: '言語', theme: 'テーマ', accent: 'アクセントカラー', language: '表示する言語',
+        themeSystem: 'システムに合わせる', themeDark: 'ダーク', themeLight: 'ライト', langSystem: 'システムに合わせる',
+        accentGold: 'ゴールド', accentIndigo: 'インディゴ', accentBlue: 'ブルー', accentGreen: 'グリーン', accentCoral: 'コーラル',
+      },
+      en: {
+        search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
+        from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
+        show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
+        needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
+        updateAvail: (v) => `Version ${v} is available`, updating: 'Updating…', updateFailed: (e) => `Update failed: ${e}`,
+        navAppearance: 'Appearance', navLang: 'Language', theme: 'Theme', accent: 'Accent color', language: 'Display language',
+        themeSystem: 'Match system', themeDark: 'Dark', themeLight: 'Light', langSystem: 'Match system',
+        accentGold: 'Gold', accentIndigo: 'Indigo', accentBlue: 'Blue', accentGreen: 'Green', accentCoral: 'Coral',
+      },
+    };
+    const ACCENTS = { gold: '#b89558', indigo: '#6a55d6', blue: '#3f6df0', green: '#1f9d68', coral: '#ff6b6b' };
+    const ACCENT_TEXT = { gold: '#17130d', indigo: '#ffffff', blue: '#ffffff', green: '#ffffff', coral: '#2a0d0d' };
+    const defaults = { theme: 'system', accent: 'gold', lang: 'system' };
+    let settings = { ...defaults };
+    try { settings = { ...defaults, ...JSON.parse(localStorage.getItem('synclane-settings') || '{}') }; } catch (_) {}
+    const resolvedLang = () => settings.lang === 'system' ? ((navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en') : settings.lang;
+    const t = (key, ...args) => { const v = I18N[resolvedLang()][key]; return typeof v === 'function' ? v(...args) : v; };
+    const dark = matchMedia('(prefers-color-scheme: dark)');
+    function applyTheme() {
+      const root = document.documentElement;
+      root.dataset.resolved = settings.theme === 'system' ? (dark.matches ? 'dark' : 'light') : settings.theme;
+      root.style.setProperty('--accent', ACCENTS[settings.accent] || ACCENTS.gold);
+      root.style.setProperty('--accent-text', ACCENT_TEXT[settings.accent] || ACCENT_TEXT.gold);
+    }
+    function applyLang() {
+      document.documentElement.lang = resolvedLang();
+      document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+      document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); el.setAttribute('aria-label', t(el.dataset.i18nTitle)); });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+      renderSettingsOptions();
+      if (loaded) renderEvents();
+    }
+    function saveSettings() {
+      try { localStorage.setItem('synclane-settings', JSON.stringify(settings)); } catch (_) {}
+      applyTheme(); applyLang();
+    }
+    dark.addEventListener('change', applyTheme);
+    function optionButtons(container, items, current, onPick) {
+      container.innerHTML = '';
+      for (const [value, label, color] of items) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        if (color) { b.className = 'swatch' + (value === current ? ' on' : ''); b.style.background = color; b.title = label; b.setAttribute('aria-label', label); }
+        else { b.textContent = label; if (value === current) b.className = 'on'; }
+        b.addEventListener('click', () => onPick(value));
+        container.appendChild(b);
+      }
+    }
+    function renderSettingsOptions() {
+      optionButtons($('theme-option'), [['system', t('themeSystem')], ['dark', t('themeDark')], ['light', t('themeLight')]], settings.theme, (v) => { settings.theme = v; saveSettings(); });
+      optionButtons($('accent-option'), Object.entries(ACCENTS).map(([k, c]) => [k, t('accent' + k[0].toUpperCase() + k.slice(1)), c]), settings.accent, (v) => { settings.accent = v; saveSettings(); });
+      optionButtons($('lang-option'), [['system', t('langSystem')], ['ja', '日本語'], ['en', 'English']], settings.lang, (v) => { settings.lang = v; saveSettings(); });
+    }
+    // 検索ウィンドウなど、別のウィンドウで設定を変えたときも追従する
+    window.addEventListener('storage', (event) => {
+      if (event.key !== 'synclane-settings' || !event.newValue) return;
+      try { settings = { ...defaults, ...JSON.parse(event.newValue) }; applyTheme(); applyLang(); } catch (_) {}
+    });
+    document.querySelectorAll('.settings-nav-item').forEach((btn) => btn.addEventListener('click', () => {
+      document.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.settings-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === btn.dataset.tab));
+    }));
+    $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; });
+    $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
+    $('settings-overlay').addEventListener('click', (e) => { if (e.target === $('settings-overlay')) $('settings-overlay').hidden = true; });
+
+    // ---- 日付(表示はローカル時刻の「YYYY-MM-DD HH:mm」。絞り込みもローカルの日付で行う) ----
+    const pad = (n) => String(n).padStart(2, '0');
+    const localDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    function formatTime(iso) {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : `${localDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
     function addDays(date, days) {
       const value = new Date(`${date}T00:00:00`);
       value.setDate(value.getDate() + days);
-      return value.toISOString().slice(0, 10);
+      return localDate(value);
     }
+    // ローカルのその日の0時を、保存形式(UTC)の時刻にする
+    const dayStart = (date) => new Date(`${date}T00:00:00`).toISOString();
+
+    let searchResults = [];
+    let selectedResult = -1;
+    let loaded = false;
+    let searchActive = false; // 検索ウィンドウから条件が届いている間は、その条件で一覧を引く
     function searchDates() {
       const mode = $('date-mode').value;
       if (mode === 'range') {
         const from = $('range-from').value || null;
-        const to = $('range-to').value ? addDays($('range-to').value, 1) : null;
-        return { from, to, label: from || to ? `${from || '…'}〜${to ? addDays(to, -1) : '…'}` : '期間未指定' };
+        const to = $('range-to').value || null;
+        return { from: from && dayStart(from), to: to && dayStart(addDays(to, 1)) };
       }
       if (mode === 'around' && $('around-date').value) {
         const days = Math.max(0, Number($('around-days').value) || 0);
         const center = $('around-date').value;
-        return { from: addDays(center, -days), to: addDays(center, days + 1), label: `${center} 前後${days}日` };
+        return { from: dayStart(addDays(center, -days)), to: dayStart(addDays(center, days + 1)) };
       }
-      return { from: null, to: null, label: '日付指定なし' };
+      return { from: null, to: null };
+    }
+    function mainDates() {
+      const from = $('filter-from').value || null;
+      const to = $('filter-to').value || null;
+      return { from: from && dayStart(from), to: to && dayStart(addDays(to, 1)) };
     }
     function updateDateFields() {
       const mode = $('date-mode').value;
       document.body.classList.toggle('date-expanded', true);
-      const range = $('range-fields');
-      const around = $('around-fields');
-      range.hidden = mode !== 'range';
-      around.hidden = mode !== 'around';
-      range.style.display = mode === 'range' ? 'flex' : 'none';
-      around.style.display = mode === 'around' ? 'flex' : 'none';
+      $('range-fields').hidden = mode !== 'range';
+      $('around-fields').hidden = mode !== 'around';
+      $('range-fields').style.display = mode === 'range' ? 'flex' : 'none';
+      $('around-fields').style.display = mode === 'around' ? 'flex' : 'none';
     }
     async function load() {
-      if (!invoke) { $('timeline').innerHTML = '<div class="empty">Tauriアプリから起動してください。</div>'; return; }
-      const info = await invoke('status');
-      if ($('events')) $('events').textContent = info.events.toLocaleString();
-      if ($('sessions')) $('sessions').textContent = info.sessions.toLocaleString();
-      if ($('journals')) $('journals').textContent = info.journals.toLocaleString();
-      const dates = isSearchWindow ? searchDates() : { from: null, to: null };
-      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query: isSearchWindow ? ($('query').value || null) : null, limit: 100 });
+      if (!invoke) { $('timeline').innerHTML = `<div class="empty">${t('needApp')}</div>`; return; }
+      const bySearch = isSearchWindow || searchActive;
+      const dates = bySearch ? searchDates() : mainDates();
+      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query: bySearch ? ($('query').value || null) : null, limit: 100 });
       searchResults = events;
       selectedResult = events.length ? 0 : -1;
+      loaded = true;
       renderEvents();
       updateSearchNav();
     }
     function renderEvents() {
-      if (!searchResults.length) { $('timeline').innerHTML = '<div class="empty">この条件の記録はありません。</div>'; return; }
+      if (!searchResults.length) { $('timeline').innerHTML = `<div class="empty">${t('none')}</div>`; return; }
       const rows = [];
       for (let i = 0; i < searchResults.length;) {
         const current = searchResults[i];
@@ -154,7 +321,7 @@
       $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>USER</div><div>ASSISTANT</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
       if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
     }
-    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${e.occurred_at}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${e.role}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
+    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${e.role}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
     function updateSearchNav() {
       $('previous').disabled = selectedResult <= 0;
       $('next').disabled = selectedResult < 0 || selectedResult >= searchResults.length - 1;
@@ -187,7 +354,8 @@
         event.preventDefault();
         openSearchWindow();
       } else if (event.key === 'Escape') {
-        if (isSearchWindow) invoke?.('close_search_window');
+        if (!$('settings-overlay').hidden) $('settings-overlay').hidden = true;
+        else if (isSearchWindow) invoke?.('close_search_window');
         else if (document.body.classList.contains('search-open')) setSearchOpen(false);
       }
     });
@@ -202,6 +370,7 @@
         stamp: Date.now()
       }));
     }
+    // 検索ウィンドウで「表示」を押すと、メイン画面の一覧がその条件に変わる
     window.addEventListener('storage', (event) => {
       if (isSearchWindow || event.key !== 'synclane-search' || !event.newValue) return;
       const value = JSON.parse(event.newValue);
@@ -212,13 +381,17 @@
       $('around-days').value = value.aroundDays || '5';
       $('query').value = value.query || '';
       updateDateFields();
-      load();
+      searchActive = true;
+      load().catch(() => {});
     });
     $('date-mode').addEventListener('change', updateDateFields);
-    $('refresh').addEventListener('click', () => { isSearchWindow ? publishSearch() : load(); });
-    $('query').addEventListener('keydown', (event) => { if (event.key === 'Enter') isSearchWindow ? publishSearch() : load(); });
+    $('refresh').addEventListener('click', () => { isSearchWindow ? publishSearch() : load().catch(() => {}); });
+    $('query').addEventListener('keydown', (event) => { if (event.key === 'Enter') isSearchWindow ? publishSearch() : load().catch(() => {}); });
     $('previous').addEventListener('click', () => moveSearch(-1));
     $('next').addEventListener('click', () => moveSearch(1));
+    $('filter-apply').addEventListener('click', () => { searchActive = false; load().catch(() => {}); });
+    $('filter-clear').addEventListener('click', () => { searchActive = false; $('filter-from').value = ''; $('filter-to').value = ''; load().catch(() => {}); });
+
     // 新しい版があれば、メイン画面の右下に出す。更新は本人が押したときだけ入れる
     async function checkUpdate() {
       const updater = window.__TAURI__?.updater;
@@ -226,16 +399,16 @@
       try {
         const update = await updater.check();
         if (!update) return;
-        $('update-text').textContent = `新しい版 ${update.version} があります`;
+        $('update-text').textContent = t('updateAvail', update.version);
         $('update-bar').hidden = false;
         $('update-run').addEventListener('click', async () => {
           $('update-run').disabled = true;
-          $('update-text').textContent = '更新しています…';
+          $('update-text').textContent = t('updating');
           try {
             await update.downloadAndInstall();
             await window.__TAURI__.process.relaunch();
           } catch (error) {
-            $('update-text').textContent = `更新できませんでした: ${error}`;
+            $('update-text').textContent = t('updateFailed', error);
             $('update-run').disabled = false;
           }
         });
@@ -243,11 +416,13 @@
         console.error('更新の確認に失敗しました', error);
       }
     }
-    if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
+    applyTheme();
     updateDateFields();
+    applyLang();
+    if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
     // 収集役が新しい会話を取り込んだら、メイン画面の一覧を最新にする
     if (!isSearchWindow) window.__TAURI__?.event?.listen('events-updated', () => load().catch(() => {}));
-    if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">読み込みに失敗しました: ${escapeHtml(String(err))}</div>`; });
+    if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">${t('loadFailed')}${escapeHtml(String(err))}</div>`; });
   </script>
 </body>
 </html>
