@@ -79,7 +79,7 @@
     .event.selected { background: var(--selected); }
     .event-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
     .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
-    .role { color: var(--role); text-transform: uppercase; letter-spacing: .08em; }
+    .role { color: var(--role); letter-spacing: .08em; }
     .event-content { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); }
     .empty { color: var(--faint); padding: 40px 0; }
     .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
@@ -198,7 +198,7 @@
     // ---- 言語 ----
     const I18N = {
       ja: {
-        reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
+        roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
         from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
@@ -208,7 +208,7 @@
         colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
       },
       en: {
-        reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
+        roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
         from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
@@ -432,10 +432,10 @@
           i += 1;
         }
       }
-      $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>USER</div><div>ASSISTANT</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
+      $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>${roleLabel('USER')}</div><div>${roleLabel('ASSISTANT')}</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
       if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
     }
-    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${e.role}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
+    function eventMarkup(e, index) { return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span>${escapeHtml(e.project_path)}</span></div><div class="event-content">${escapeHtml(short(e.content))}</div></article>`; }
     function updateSearchNav() {
       $('previous').disabled = selectedResult <= 0;
       $('next').disabled = selectedResult < 0 || selectedResult >= searchResults.length - 1;
@@ -447,6 +447,8 @@
       renderEvents();
       updateSearchNav();
     }
+    // 保存される値は USER / ASSISTANT のまま。表示だけ言語に合わせる
+    function roleLabel(role) { const r = role.toUpperCase(); return r === 'USER' ? t('roleUser') : r === 'ASSISTANT' ? t('roleAssistant') : role; }
     function sourceLabel(source) { return ({ claude_code: 'Claude Code', gemini_cli: 'Gemini CLI' }[source] || source); }
     function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function setSearchOpen(open) {
