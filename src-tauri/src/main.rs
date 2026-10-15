@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 struct AppState(Arc<Mutex<Connection>>);
 
@@ -80,14 +80,20 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState(shared_conn))
-        .setup(move |_app| {
+        .setup(move |app| {
+            let handle = app.handle().clone();
             thread::spawn(move || {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
                 let root = home.join(".claude").join("projects");
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
-                        if let Err(error) = importer::collect_claude_incremental(&root, &mut conn) {
-                            eprintln!("synclane collector: {error:#}");
+                        match importer::collect_claude_incremental(&root, &mut conn) {
+                            // 新しいイベントが入ったことだけ画面に知らせる(一覧は動かさない)
+                            Ok(report) if report.events > 0 => {
+                                let _ = handle.emit("events-updated", report.events);
+                            }
+                            Ok(_) => {}
+                            Err(error) => eprintln!("synclane collector: {error:#}"),
                         }
                     }
                     thread::sleep(Duration::from_secs(30));
