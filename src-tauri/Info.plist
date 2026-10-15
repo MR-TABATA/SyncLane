@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 表示言語の「システムに従う」が効くように、対応する言語を宣言する。
+       宣言がないと WebView が常に英語(navigator.language = en)を返し、日本語の Mac でも英語で出る。 -->
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>ja</string>
+    <string>en</string>
+  </array>
+</dict>
+</plist>
