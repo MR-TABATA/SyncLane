@@ -377,7 +377,7 @@
       try {
         const exe = await invoke('mcp_executable');
         const quoted = /[\s'"]/.test(exe) ? `"${exe.replace(/(["\\$`])/g, '\\$1')}"` : exe;
-        $('mcp-command').value = `claude mcp add synclane -- ${quoted} --mcp`;
+        $('mcp-command').value = `claude mcp add --scope user synclane -- ${quoted} --mcp`;
       } catch (_) {}
     }
     $('mcp-copy').addEventListener('click', async () => {
