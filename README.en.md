@@ -26,7 +26,7 @@ Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (cha
 - It sends data only to the SyncLane app on this Mac (`127.0.0.1`), never to an external server. If the app is not running, it retries later.
 - Only **conversations opened in Chrome** are imported. A conversation held only in the Gemini Mac app or on your phone is not imported, even though it syncs, until you open it once in Chrome.
 - The page shows no time for each message, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
-- If a site changes its page layout, importing may stop working. In that case, fix `extension/extract.js`.
+- If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
 
 ## Ask your AI (MCP)
 

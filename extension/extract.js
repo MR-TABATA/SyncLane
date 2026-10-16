@@ -122,6 +122,13 @@
     return null;
   }
 
-  // テストと、これまでの呼び出し（conversationId(pathname)）のための、Gemini の ID 取り出し
-  root.SyncLaneExtract = { conversation, conversationId: geminiConversationId, chatgptConversationId };
+  // この URL が「会話の画面」か（会話の ID があるか）。会話の画面なのに conversation() が null なら、
+  // 画面の作りが変わった可能性が高い（content.js が、拡張のアイコンに「!」を出す）。
+  function expectsConversation(loc) {
+    if (loc.hostname === "gemini.google.com") return !!geminiConversationId(loc.pathname);
+    if (loc.hostname === "chatgpt.com") return !!chatgptConversationId(loc.pathname);
+    return false;
+  }
+
+  root.SyncLaneExtract = { conversation, expectsConversation, conversationId: geminiConversationId, chatgptConversationId };
 })(typeof window !== "undefined" ? window : globalThis);

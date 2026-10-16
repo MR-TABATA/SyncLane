@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OnlyFans サービス説明</title>
+<!--
+  extract.js の試験。ブラウザで開くと、結果が下に出る（すべて OK なら先頭が「ALL OK」）。
+    cd extension && python3 -m http.server 8765 --bind 127.0.0.1   →   http://127.0.0.1:8765/test/
+  部品（fixture）は、実際の画面の構造を真似たもの。画面の作りが変わったら、実際の画面の構造を調べて、
+  この部品も直す（手順は extension/README.md）。部品が古いままだと、試験は通るのに、実際の画面では取れない。
+-->
+<body>
+<script src="../extract.js"></script>
+<script>
+  const E = window.SyncLaneExtract;
+  const results = [];
+  const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: ok ? undefined : detail });
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const mount = (html) => { const d = document.createElement("div"); d.innerHTML = html; document.body.appendChild(d); return d; };
+
+  // ---------------- Gemini（2026-10 の共有ページの構造） ----------------
+  function geminiTurn(q, a) {
+    return `<share-turn-viewer>
+      <user-query><span class="user-query-container"><user-query-content><div class="query-content">
+        <div class="query-text"><span class="cdk-visually-hidden screen-reader-user-query-label">あなたのプロンプト </span><p class="query-text-line">${q}</p></div>
+      </div></user-query-content></span></user-query>
+      <response-container><structured-content-container><message-content><div class="markdown"><p>${a}</p></div></message-content></structured-content-container></response-container>
+    </share-turn-viewer>`;
+  }
+  {
+    const host = mount(geminiTurn("質問1", "答え1") + geminiTurn("質問2", "答え2"));
+    const loc = { hostname: "gemini.google.com", pathname: "/app/abc123def456" };
+    const c = E.conversation(host, loc);
+    check("gemini: 4件、読み上げ用の見出しが混ざらない",
+      c && c.source === "gemini_web" && c.conversation_id === "abc123def456" &&
+      same(c.messages.map((m) => [m.role, m.text]), [["user", "質問1"], ["assistant", "答え1"], ["user", "質問2"], ["assistant", "答え2"]]),
+      c);
+    check("gemini: 題名は最初の発言", c && c.title === "質問1", c && c.title);
+    check("gemini: /share/ の ID は share_ が付く", E.conversationId("/share/fbbe5f29578c") === "share_fbbe5f29578c");
+    check("gemini: 新しいチャット(/app)は会話の画面ではない", !E.expectsConversation({ hostname: "gemini.google.com", pathname: "/app" }));
+    host.remove();
+  }
+
+  // ---------------- ChatGPT（2026-10 の画面の構造） ----------------
+  // 3 ページ分が DOM に残り、今見ているのは active-page="true" の 1 つだけ
+  function chatgptTurn(conv, key, userId, userText, userAt, asstId, asstText) {
+    return `<div data-turn-key="${key}">
+      ${userAt ? `<div role="separator"><time datetime="${userAt}"><span>日付</span></time></div>` : ""}
+      <div><h4>あなたの発言:</h4>
+        <div data-chatgpt-search-unit-key="fallback-turn-0:0:user" data-chatgpt-search-message-ids="${userId}">
+          <div data-content-search-unit-key="fallback-turn-0:0:user"><div><div class="whitespace-pre-wrap">${userText}</div></div></div>
+        </div></div>
+      <div><span hidden></span>
+        <div data-chatgpt-search-unit-key="fallback-turn-0:1:assistant" data-chatgpt-search-message-ids="${asstId}">
+          <h4 data-conversation-role="assistant">ChatGPT の発言:</h4>
+          <div><div data-chatgpt-selection-conversation-id="${conv}" data-chatgpt-selection-message-id="${asstId}"><p>${asstText}</p></div></div>
+        </div></div>
+      <div><button aria-label="コピーする"></button></div></div>`;
+  }
+  const CONV = "6a028271-e50c-8320-b519-0035cb794fcc";
+  const page = (active, conv, turns) => `<div data-app-shell-active-page="${active}">${turns.map((t) => chatgptTurn(conv, ...t)).join("")}</div>`;
+  {
+    const host = mount(
+      page(false, "aaaaaaaa-0000-0000-0000-000000000001", [["k1", "u-x1", "裏の質問1", null, "a-x1", "裏の答え1"]]) +
+      page(false, "aaaaaaaa-0000-0000-0000-000000000002", [["k2", "u-x2", "裏の質問2", null, "a-x2", "裏の答え2"]]) +
+      page(true, CONV, [
+        ["k3", "u-1", "質問1", "2026-05-12T01:29:15.635Z", "a-1", "答え1"],
+        ["k4", "u-2", "質問2", null, "a-2", "答え2"],
+      ]));
+    const tab = { querySelectorAll: (q) => host.querySelectorAll(q), querySelector: (q) => host.querySelector(q), title: "フリーWi-Fiの質問" };
+    const c = E.conversation(tab, { hostname: "chatgpt.com", pathname: "/c/" + CONV });
+    check("chatgpt: 今見ているページの 4 件だけ(裏の 2 ページは除く)、ID と時刻つき、見出しが混ざらない",
+      c && c.source === "chatgpt_web" && c.conversation_id === CONV &&
+      same(c.messages.map((m) => [m.role, m.text, m.id, m.at]),
+        [["user", "質問1", "u-1", "2026-05-12T01:29:15.635Z"], ["assistant", "答え1", "a-1", undefined], ["user", "質問2", "u-2", undefined], ["assistant", "答え2", "a-2", undefined]]),
+      c);
+    check("chatgpt: 題名はタブの題名", c && c.title === "フリーWi-Fiの質問", c && c.title);
+    check("chatgpt: /g/…/c/<id> と /share/<id> の ID",
+      E.chatgptConversationId("/g/g-abc/c/6f1c2d3e-aaaa") === "6f1c2d3e-aaaa" && E.chatgptConversationId("/share/abcd1234") === "share_abcd1234");
+    check("chatgpt: 新しいチャット(/)は会話の画面ではない", !E.expectsConversation({ hostname: "chatgpt.com", pathname: "/" }));
+
+    // ---- 壊れたときの検出: 会話の URL なのに、読み取れない ----
+    const loc = { hostname: "chatgpt.com", pathname: "/c/" + CONV };
+    const changed = mount(`<div data-app-shell-active-page="true"><section class="new-layout"><div class="msg">質問</div><div class="msg">答え</div></section></div>`);
+    const brokenTab = { querySelectorAll: (q) => changed.querySelectorAll(q), querySelector: (q) => changed.querySelector(q), title: "題" };
+    check("壊れた画面: 会話の URL なのに、読み取れない(null)→ バッジ「!」の条件を満たす",
+      E.expectsConversation(loc) && E.conversation(brokenTab, loc) === null, E.conversation(brokenTab, loc));
+    changed.remove(); host.remove();
+  }
+
+  const ok = results.every((r) => r.ok);
+  const pre = document.createElement("pre");
+  pre.id = "result";
+  pre.textContent = (ok ? "ALL OK" : "NG") + "\n" + results.map((r) => (r.ok ? "  OK  " : "  NG  ") + r.name + (r.ok ? "" : "\n        " + JSON.stringify(r.detail))).join("\n");
+  document.body.prepend(pre);
+</script>
