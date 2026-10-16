@@ -3,9 +3,15 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-/// ブラウザ拡張から届く、Web 版の Gemini の会話。
+/// ブラウザ拡張から届く、Web 版の会話。
 pub const GEMINI_WEB_TOOL: &str = "gemini_web";
-const SOURCES: &[&str] = &[GEMINI_WEB_TOOL];
+pub const CHATGPT_WEB_TOOL: &str = "chatgpt_web";
+const SOURCES: &[&str] = &[GEMINI_WEB_TOOL, CHATGPT_WEB_TOOL];
+
+/// 会話の置き場所(画面では、プロジェクトの欄に出る)。
+fn host(source: &str) -> &'static str {
+    if source == CHATGPT_WEB_TOOL { "chatgpt.com" } else { "gemini.google.com" }
+}
 
 const MAX_MESSAGES: usize = 5000;
 const MAX_TEXT_BYTES: usize = 1_000_000;
@@ -26,6 +32,9 @@ pub struct Message {
     pub index: i64,
     pub role: String,
     pub text: String,
+    /// 画面が発言ごとに持つ ID(ChatGPT の data-message-id)。あれば、それを ID に使う。
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -80,6 +89,11 @@ struct Item<'a> {
 ///   あなたの発言: 文面のハッシュ + 同じ文面の何回目か
 ///   Gemini の回答: 直前のあなたの発言に紐づける(+ その発言への何番目の回答か)
 fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
+    let own_id = |message: &Message| -> Option<String> {
+        let id = message.id.as_deref()?;
+        let ok = !id.is_empty() && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        ok.then(|| format!("{conversation_id}:m:{id}"))
+    };
     let mut out = Vec::new();
     let mut seen: HashMap<u64, usize> = HashMap::new();
     let mut turn: Option<(u64, usize)> = None;
@@ -92,16 +106,16 @@ fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
         let id = if message.role == "user" {
             let hash = fnv(text);
             let nth = seen.entry(hash).or_insert(0);
-            let id = format!("{conversation_id}:u:{hash:016x}:{nth}");
+            let id = own_id(message).unwrap_or_else(|| format!("{conversation_id}:u:{hash:016x}:{nth}"));
             turn = Some((hash, *nth));
             *nth += 1;
             answers = 0;
             id
         } else {
-            let id = match turn {
+            let id = own_id(message).unwrap_or_else(|| match turn {
                 Some((hash, nth)) => format!("{conversation_id}:a:{hash:016x}:{nth}:{answers}"),
                 None => format!("{conversation_id}:a:start:{answers}"),
-            };
+            });
             answers += 1;
             id
         };
@@ -113,7 +127,7 @@ fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
 pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> {
     validate(payload)?;
     let tool = payload.source.as_str();
-    let source_file = format!("gemini.google.com/{}", payload.conversation_id);
+    let source_file = format!("{}/{}", host(tool), payload.conversation_id);
     let captured_ms = parse_iso_ms(&payload.captured_at).expect("validated");
 
     let tx = conn.transaction()?;
@@ -129,8 +143,8 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
         None => {
             tx.execute(
                 "INSERT INTO sessions(source_tool, project_path, source_file, source_hash, started_at)
-                 VALUES (?1, 'gemini.google.com', ?2, ?3, ?4)",
-                params![tool, source_file, payload.conversation_id, payload.captured_at],
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![tool, host(tool), source_file, payload.conversation_id, payload.captured_at],
             )?;
             tx.last_insert_rowid()
         }
@@ -310,7 +324,7 @@ mod tests {
             messages: messages
                 .iter()
                 .enumerate()
-                .map(|(index, (role, text))| Message { index: index as i64, role: (*role).into(), text: (*text).into() })
+                .map(|(index, (role, text))| Message { index: index as i64, role: (*role).into(), text: (*text).into(), id: None })
                 .collect(),
         }
     }
@@ -430,5 +444,33 @@ mod tests {
         assert_eq!(parse_iso_ms("1970-01-01T00:00:00.000Z"), Some(0));
         assert_eq!(parse_iso_ms("2026-13-01T00:00:00Z"), None);
         assert_eq!(parse_iso_ms("2026-10-16 00:00:00"), None);
+    }
+
+    #[test]
+    fn uses_the_screens_own_message_ids_when_given() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        let with_ids = |at: &str, rows: &[(&str, &str, &str)]| Payload {
+            source: CHATGPT_WEB_TOOL.into(),
+            conversation_id: "11111111-2222-3333-4444-555555555555".into(),
+            title: Some("題".into()),
+            captured_at: at.into(),
+            messages: rows
+                .iter()
+                .enumerate()
+                .map(|(i, (id, role, text))| Message { index: i as i64, role: (*role).into(), text: (*text).into(), id: Some((*id).into()) })
+                .collect(),
+        };
+        ingest(&mut conn, &with_ids("2026-10-16T01:00:00.000Z", &[("m3", "user", "同じ"), ("m4", "assistant", "答え")]))?;
+        // 古い発言があとから足され、同じ文面の発言もあるが、ID が違うので別々に残る
+        let report = ingest(
+            &mut conn,
+            &with_ids("2026-10-16T01:05:00.000Z", &[("m1", "user", "同じ"), ("m2", "assistant", "古い答え"), ("m3", "user", "同じ"), ("m4", "assistant", "答え")]),
+        )?;
+        assert_eq!(report, IngestReport { inserted: 2, updated: 0 });
+        assert_eq!(ordered(&conn), vec!["同じ", "古い答え", "同じ", "答え"]);
+        let (tool, project): (String, String) =
+            conn.query_row("SELECT source_tool, project_path FROM sessions", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        assert_eq!((tool.as_str(), project.as_str()), ("chatgpt_web", "chatgpt.com"));
+        Ok(())
     }
 }

@@ -1,14 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "SyncLane for Gemini",
+  "name": "SyncLane for AI chats",
   "version": "0.1.0",
-  "description": "Gemini(gemini.google.com)の会話を、この Mac の SyncLane アプリにだけ送ります。外部のサーバーには送りません。",
-  "host_permissions": ["http://127.0.0.1:47821/*"],
-  "background": { "service_worker": "background.js" },
+  "description": "Gemini と ChatGPT(Web 版)の会話を、この Mac の SyncLane アプリにだけ送ります。外部のサーバーには送りません。",
+  "host_permissions": [
+    "http://127.0.0.1:47821/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["extract.js", "content.js"],
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "extract.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]
