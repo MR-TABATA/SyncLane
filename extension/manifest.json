@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SyncLane for AI chats",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Gemini と ChatGPT(Web 版)の会話を、この Mac の SyncLane アプリにだけ送ります。外部のサーバーには送りません。",
   "host_permissions": [
     "http://127.0.0.1:47821/*"
