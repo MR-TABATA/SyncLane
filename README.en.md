@@ -15,6 +15,19 @@ Download the dmg from [mrktools.app/en/synclane/download/](https://mrktools.app/
 
 While the app is running, it imports new Claude Code conversations (`~/.claude/projects`) every 30 seconds.
 
+## Importing Gemini conversations (Chrome extension)
+
+Conversations on the web version of Gemini (gemini.google.com) have no local files, so a Chrome extension imports them.
+
+1. Open `chrome://extensions` in Chrome and turn on "Developer mode" (top right).
+2. Click "Load unpacked" and choose the `extension/` folder of this repository.
+3. Keep SyncLane running and open a conversation on gemini.google.com. It is imported automatically once the answer is finished.
+
+- It sends data only to the SyncLane app on this Mac (`127.0.0.1`), never to an external server. If the app is not running, it retries later.
+- Only **conversations opened in Chrome** are imported. A conversation held only in the Gemini Mac app is not imported, even though it syncs, until you open it once in Chrome.
+- The page shows no time for each message, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
+- If Gemini changes its page layout, importing may stop working. In that case, fix `extension/extract.js`.
+
 ## Ask your AI (MCP)
 
 Register it with Claude Code:

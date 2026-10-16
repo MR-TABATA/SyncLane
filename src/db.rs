@@ -153,7 +153,7 @@ pub fn session_events(conn: &Connection, session_id: i64, around: Option<i64>, w
     Ok(all[start..end].to_vec())
 }
 
-#[cfg(test)]
+/// メモリ上の DB(テスト用。src-tauri のテストからも使う)。
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     configure(&conn)?;

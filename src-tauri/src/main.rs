@@ -1,3 +1,5 @@
+mod ingest_server;
+
 use synclane::{db, importer};
 use synclane::db::TimelineEvent;
 use rusqlite::Connection;
@@ -160,12 +162,18 @@ fn main() {
 
     let shared_conn = Arc::new(Mutex::new(conn));
     let collector_conn = Arc::clone(&shared_conn);
+    let ingest_conn = Arc::clone(&shared_conn);
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState(shared_conn))
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
+            // ブラウザ拡張(Web 版の Gemini)からの取り込みを受ける
+            let ingest_handle = app.handle().clone();
+            ingest_server::spawn(ingest_server::ADDRESS, Arc::clone(&ingest_conn), move |changed| {
+                let _ = ingest_handle.emit("events-updated", changed);
+            });
             let handle = app.handle().clone();
             thread::spawn(move || {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
