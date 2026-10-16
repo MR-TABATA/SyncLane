@@ -9,6 +9,10 @@ Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話を、この Mac の S
 | `background.js` | アプリへ渡す。アイコンのバッジ(「!」「×」)を出す |
 | `test/index.html` | `extract.js` の試験(ブラウザで開くだけ) |
 
+## 配布用の zip
+
+`sh scripts/pack-extension.sh` で、`SyncLane-extension.zip`(展開すると `SyncLane-extension/` フォルダ)を作り、MrkTools の `public/downloads/synclane/` に置きます。試験(`test/`)とこの手順書は入れません。拡張を直したら、**zip も作り直して**、サイトに置き直してください(zip で入れた人の拡張は、自動では更新されません)。版は、`manifest.json` の `version` で変えます。
+
 ## 拡張のアイコンのバッジ
 
 | 表示 | 意味 | すること |

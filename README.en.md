@@ -2,12 +2,25 @@
 
 [日本語](README.md) | English
 
-An app (macOS) that saves your conversations with AI tools such as Claude Code on your own computer, so you can search them later. They are stored only in a local SQLite file and are never sent to a server.
+An app (macOS) that saves your conversations with AI tools such as Claude Code, Codex, Gemini and ChatGPT on your own computer, so you can search them later. They are stored only in a local SQLite file and are never sent to a server.
 
 - Search past conversations by keyword or date
 - Reread a day's conversations with AI in a day-by-day timeline
 - Works as an MCP server, so your AI (Claude Code, the Claude app) can search your past conversations (read-only)
 - Free and open source (MIT)
+
+## What it imports
+
+| Source | How |
+|---|---|
+| Claude Code | Automatic every 30 seconds while the app runs (`~/.claude/projects`) |
+| Codex (Codex app, Codex CLI) | Automatic every 30 seconds while the app runs (`~/.codex/sessions`) |
+| Gemini (web), ChatGPT (web) | Chrome extension ([how](#importing-gemini-and-chatgpt-conversations-chrome-extension)) |
+| Gemini CLI | Command (`import gemini`; build from source) |
+
+The command (CLI) is **not included in the download (dmg)**. Build it from the source (see "Development" below). The downloaded app only has the window and the MCP server (`--mcp`) your AI uses to search.
+
+It saves your input and the AI's text replies. Tool output and the AI's reasoning are not saved.
 
 ## Install
 
@@ -19,13 +32,20 @@ While the app is running, it imports new Claude Code conversations (`~/.claude/p
 
 Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (chatgpt.com) have no local files, so a Chrome extension imports them.
 
-1. Open `chrome://extensions` in Chrome and turn on "Developer mode" (top right).
-2. Click "Load unpacked" and choose the `extension/` folder of this repository.
-3. Keep SyncLane running and open a conversation on Gemini or ChatGPT (reload tabs that were already open before you installed the extension). It is imported automatically once the answer is finished.
+1. Download and unzip the extension. This makes a `~/Downloads/SyncLane-extension` folder (do not delete it, or the extension stops working).
+
+   ```
+   https://mrktools.app/downloads/synclane/SyncLane-extension.zip
+   ```
+
+2. Open `chrome://extensions` in Chrome and turn on "Developer mode" (top right).
+3. Click "Load unpacked" and choose `~/Downloads/SyncLane-extension`.
+4. Keep SyncLane running and open a conversation on Gemini or ChatGPT (reload tabs that were already open before you installed the extension). It is imported automatically once the answer is finished.
 
 - It sends data only to the SyncLane app on this Mac (`127.0.0.1`), never to an external server. If the app is not running, it retries later.
 - Only **conversations opened in Chrome** are imported. A conversation held only in the Gemini Mac app or on your phone is not imported, even though it syncs, until you open it once in Chrome.
-- The page shows no time for each message, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
+- For message times, ChatGPT uses the time shown on the page. Gemini shows none, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
+- To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
 
 ## Ask your AI (MCP)

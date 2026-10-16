@@ -2,12 +2,25 @@
 
 日本語 | [English](README.en.md)
 
-Claude Code などのAIとの会話を、自分のPCに保存して、あとから検索できるアプリ(macOS)。保存先はPCの中のSQLiteだけで、外のサーバーには送りません。
+Claude Code・Codex・Gemini・ChatGPT などのAIとの会話を、自分のPCに保存して、あとから検索できるアプリ(macOS)。保存先はPCの中のSQLiteだけで、外のサーバーには送りません。
 
 - キーワードや日付で、過去の会話を探せる
 - 日付ごとのタイムラインで、その日のAIとの会話を読み返せる
 - MCPサーバーとして、AI(Claude Code・Claude アプリ)から、過去の会話を検索できる(読み取り専用)
 - 無料・オープンソース(MIT)
+
+## 取り込めるもの
+
+| 取り込み元 | 方法 |
+|---|---|
+| Claude Code | アプリ起動中、30秒ごとに自動(`~/.claude/projects`) |
+| Codex(Codex アプリ・Codex CLI) | アプリ起動中、30秒ごとに自動(`~/.codex/sessions`) |
+| Gemini(ウェブ版)・ChatGPT(ウェブ版) | Chrome 拡張([手順](#geminichatgpt-の会話を取り込むchrome-拡張)) |
+| Gemini CLI | コマンド(`import gemini`。ソースからビルド) |
+
+コマンド(CLI)は、**配布版(dmg)には入っていません**。ソースをビルドして使います(下の「開発」)。配布版のアプリは、画面と、AI から検索するための MCP(`--mcp`)だけです。
+
+保存するのは、あなたの入力と、AIのテキストの応答です。ツールの実行結果と、AIの思考の過程は保存しません。
 
 ## インストール
 
@@ -19,13 +32,20 @@ Claude Code などのAIとの会話を、自分のPCに保存して、あとか�
 
 Web 版の Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話は、ローカルにファイルが無いので、Chrome 拡張で取り込みます。
 
-1. Chrome で `chrome://extensions` を開き、右上の「デベロッパー モード」をオンにします。
-2. 「パッケージ化されていない拡張機能を読み込む」で、このリポジトリの `extension/` フォルダを選びます。
-3. SyncLane を起動したまま、Gemini か ChatGPT で会話を開きます(拡張を入れる前から開いていたタブは、再読み込みしてください)。回答が書き終わると、自動で取り込まれます。
+1. 拡張をダウンロードして、展開します。`~/Downloads/SyncLane-extension` フォルダができます(このフォルダは、消さないでください。消すと、拡張が動かなくなります)。
+
+   ```
+   https://mrktools.app/downloads/synclane/SyncLane-extension.zip
+   ```
+
+2. Chrome で `chrome://extensions` を開き、右上の「デベロッパー モード」をオンにします。
+3. 「パッケージ化されていない拡張機能を読み込む」で、`~/Downloads/SyncLane-extension` を選びます。
+4. SyncLane を起動したまま、Gemini か ChatGPT で会話を開きます(拡張を入れる前から開いていたタブは、再読み込みしてください)。回答が書き終わると、自動で取り込まれます。
 
 - 送り先は、この Mac の SyncLane アプリ(`127.0.0.1`)だけです。外部のサーバーには送りません。アプリが起動していなければ、あとで送り直します。
 - 取り込まれるのは、**Chrome で開いた会話**です。Gemini アプリ(Mac)やスマホだけで交わした会話は、同期されていても、Chrome で一度開くまで取り込まれません。
-- 画面に発言の時刻が無いので、時刻は「取り込んだ時刻」になります。文章は、書式(見出し・表など)を外した文字だけです。
+- 発言の時刻は、ChatGPT は画面にある時刻を使います。Gemini は画面に時刻が無いので、「取り込んだ時刻」になります。文章は、書式(見出し・表など)を外した文字だけです。
+- ソースから使う場合は、このリポジトリの `extension/` フォルダを選びます。zip は、`sh scripts/pack-extension.sh` で作ります。
 - 各サイトが画面の作りを変えると、取り込めなくなることがあります。会話の画面なのに何も読み取れないときは、拡張のアイコンに「!」が出ます(アプリが起動していないときは「×」)。直し方は [`extension/README.md`](extension/README.md) を見てください。
 
 ## AIに聞く(MCP)
