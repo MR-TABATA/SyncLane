@@ -38,6 +38,21 @@
     check("gemini: 新しいチャット(/app)は会話の画面ではない", !E.expectsConversation({ hostname: "gemini.google.com", pathname: "/app" }));
     host.remove();
   }
+  {
+    // 実際の Gemini で起きたこと(2026-10): 画面から遠い古い答えは、中身の描画を省かれ、innerText が空になる
+    // (textContent には文字がある)。答えの親(response-container)に content-visibility:hidden を付けて、同じ状態を作る。
+    // (要素自体に付けても、innerText は空にならない。親が描画を省くと、空になる。visibility:hidden でも同じ。
+    //  カスタム要素は、標準では inline で content-visibility が効かないので、display:block も付ける)
+    const old = geminiTurn("古い質問", "古い答え<br>2行目").replace("<response-container>", '<response-container style="display:block;content-visibility:hidden">');
+    const host = mount(old + geminiTurn("新しい質問", "新しい答え"));
+    const mc = host.querySelector("message-content");
+    check("(前提)描画を省かれた答えは、innerText が空で、textContent に文字がある", mc.innerText === "" && mc.textContent.trim() !== "", [mc.innerText, mc.textContent]);
+    const c = E.conversation(host, { hostname: "gemini.google.com", pathname: "/app/abc123def456" });
+    check("gemini: 描画を省かれた古い答えも取れる(順番・改行も保つ)",
+      c && same(c.messages.map((m) => [m.role, m.text]), [["user", "古い質問"], ["assistant", "古い答え\n2行目"], ["user", "新しい質問"], ["assistant", "新しい答え"]]),
+      c);
+    host.remove();
+  }
 
   // ---------------- ChatGPT（2026-10 の画面の構造） ----------------
   // 3 ページ分が DOM に残り、今見ているのは active-page="true" の 1 つだけ

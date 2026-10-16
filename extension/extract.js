@@ -7,16 +7,41 @@
 //   ChatGPT (chatgpt.com)
 //     - 発言の枠は [data-chatgpt-search-unit-key]（…:user / …:assistant）。今見ているページ（active-page=true）だけ読む
 (function (root) {
+  // 要素の文字を読む。通常は innerText（見た目どおりの改行）。
+  // 画面から遠い古い発言は、サイトが中身の描画を省く（content-visibility / visibility:hidden）ため、
+  // innerText が空になる（textContent には文字がある）。そのときは、段落ごとに改行を入れて、自分で組み立てる。
+  // （2026-10 の Gemini で、長い会話の古い答えが取り込めなかった原因）
+  const BLOCK = /^(P|DIV|LI|UL|OL|H[1-6]|PRE|BLOCKQUOTE|TABLE|TR|HR|SECTION|ARTICLE)$/;
+  function textOf(node) {
+    const shown = (node.innerText || "").trim();
+    if (shown) return shown;
+    const parts = [];
+    (function walk(n, inPre) {
+      for (const c of n.childNodes) {
+        if (c.nodeType === 3) parts.push(inPre ? c.nodeValue : c.nodeValue.replace(/\s+/g, " "));
+        else if (c.nodeType === 1) {
+          if (c.tagName === "BR") { parts.push("\n"); continue; }
+          if (c.tagName === "STYLE" || c.tagName === "SCRIPT") continue;
+          const block = BLOCK.test(c.tagName);
+          if (block) parts.push("\n");
+          walk(c, inPre || c.tagName === "PRE");
+          if (block) parts.push("\n");
+        }
+      }
+    })(node, false);
+    return parts.join("").split("\n").map((l) => l.trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   const lastSegmentOk = (s) => !!s && /^[A-Za-z0-9_-]{4,}$/.test(s);
 
   // ---- Gemini ----
 
   function geminiUserText(node) {
-    const lines = [...node.querySelectorAll(".query-text-line")].map((e) => e.innerText.trim()).filter(Boolean);
+    const lines = [...node.querySelectorAll(".query-text-line")].map((e) => textOf(e)).filter(Boolean);
     if (lines.length) return lines.join("\n");
     const clone = node.cloneNode(true);
     clone.querySelectorAll(".cdk-visually-hidden").forEach((e) => e.remove());
-    return (clone.innerText || "").trim();
+    return textOf(clone);
   }
 
   // /app/<id>、/gem/<gem>/<id>、/share/<id>。ID がまだ無い画面（新しいチャット）は null。
@@ -35,7 +60,7 @@
     doc.querySelectorAll("user-query, message-content").forEach((node) => {
       const isUser = node.tagName === "USER-QUERY";
       if (!isUser && node.closest("user-query")) return;
-      const text = isUser ? geminiUserText(node) : (node.innerText || "").trim();
+      const text = isUser ? geminiUserText(node) : textOf(node);
       if (text) messages.push({ index: messages.length, role: isUser ? "user" : "assistant", text });
     });
     return finish("gemini_web", id, null, messages);
@@ -55,10 +80,10 @@
   // 本文を取る。回答の「ChatGPT の発言:」のような、読み上げ用の見出し（h4）は除く。
   function chatgptUnitText(unit) {
     const body = unit.querySelector("[data-chatgpt-selection-message-id]");
-    if (body) return (body.innerText || "").trim();
+    if (body) return textOf(body);
     const clone = unit.cloneNode(true);
     clone.querySelectorAll("h4").forEach((e) => e.remove());
-    return (clone.innerText || "").trim();
+    return textOf(clone);
   }
 
   function chatgptConversation(doc, loc) {
@@ -92,7 +117,7 @@
       scope.querySelectorAll("[data-message-author-role]").forEach((node) => {
         const role = node.getAttribute("data-message-author-role");
         if (role !== "user" && role !== "assistant") return; // system や tool は取らない
-        const text = (node.innerText || "").trim();
+        const text = textOf(node);
         if (!text) return;
         const message = { index: messages.length, role, text };
         const own = node.getAttribute("data-message-id");
