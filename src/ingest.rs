@@ -35,6 +35,9 @@ pub struct Message {
     /// 画面が発言ごとに持つ ID(ChatGPT の data-message-id)。あれば、それを ID に使う。
     #[serde(default)]
     pub id: Option<String>,
+    /// 画面が持つ、その発言の時刻(ChatGPT の <time datetime>)。あれば、取り込んだ時刻の代わりに使う。
+    #[serde(default)]
+    pub at: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -82,13 +85,16 @@ struct Item<'a> {
     id: String,
     role: &'a str,
     text: &'a str,
+    at: Option<i64>,
 }
 
 /// 画面の並びの番号には頼らず、発言の中身から ID を作る。
 /// Gemini は長い会話の古い発言を、あとから足すことがある。番号だと、そのときずれる。
 ///   あなたの発言: 文面のハッシュ + 同じ文面の何回目か
 ///   Gemini の回答: 直前のあなたの発言に紐づける(+ その発言への何番目の回答か)
-fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
+fn items<'a>(conversation_id: &str, messages: &'a [Message], captured_ms: i64) -> Vec<Item<'a>> {
+    // 画面の時刻は、読み取れて、取り込んだ時刻より1日以上先でないものだけ使う
+    let at_of = |message: &Message| message.at.as_deref().and_then(parse_iso_ms).filter(|ms| *ms <= captured_ms + 86_400_000);
     let own_id = |message: &Message| -> Option<String> {
         let id = message.id.as_deref()?;
         let ok = !id.is_empty() && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
@@ -119,7 +125,7 @@ fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
             answers += 1;
             id
         };
-        out.push(Item { id, role: if message.role == "user" { "user" } else { "assistant" }, text });
+        out.push(Item { id, role: if message.role == "user" { "user" } else { "assistant" }, text, at: at_of(message) });
     }
     out
 }
@@ -174,7 +180,7 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
     }
     let max_sequence = known.values().map(|k| k.sequence).max();
 
-    let items = items(&payload.conversation_id, &payload.messages);
+    let items = items(&payload.conversation_id, &payload.messages, captured_ms);
     let first_known = items.iter().position(|item| known.contains_key(&item.id));
     let last_known = items.iter().rposition(|item| known.contains_key(&item.id));
 
@@ -184,29 +190,43 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
         None => max_sequence.map_or(0, |max| max + 1),
     };
 
-    // 時刻: すでにある発言は変えない。あとから読み込まれた古い発言は、基準より前に、1ms ずつずらして置く
+    // 時刻: すでにある発言は変えない。画面が時刻を持つ新しい発言は、その時刻にする(その直後の回答は +1ms)。
+    // あとから読み込まれた古い発言は、基準より前に、1ms ずつずらして置く
     // (画面は時刻順に並べるので、こうすると会話の順番が保たれる)
     let known_ms = |id: &str| parse_iso_ms(&known[id].occurred_at).unwrap_or(captured_ms);
-    let mut times = vec![0i64; items.len()];
+    let n = items.len();
+    let is_known = |i: usize| known.contains_key(&items[i].id);
+    let from_at: Vec<bool> = (0..n).map(|i| !is_known(i) && items[i].at.is_some()).collect();
+    let mut times = vec![0i64; n];
+    for i in 0..n {
+        if from_at[i] {
+            times[i] = items[i].at.expect("from_at");
+        }
+    }
     match first_known {
         Some(f) => {
             times[f] = known_ms(&items[f].id);
             for i in (0..f).rev() {
-                times[i] = times[i + 1] - 1;
+                if !from_at[i] {
+                    times[i] = times[i + 1] - 1;
+                }
             }
-            for i in f + 1..items.len() {
-                times[i] = if known.contains_key(&items[i].id) {
-                    known_ms(&items[i].id)
-                } else if last_known.is_some_and(|l| i < l) {
-                    times[i - 1] + 1
+            for i in f + 1..n {
+                if is_known(i) {
+                    times[i] = known_ms(&items[i].id);
+                } else if from_at[i] {
+                } else if from_at[i - 1] || last_known.is_some_and(|l| i < l) {
+                    times[i] = times[i - 1] + 1;
                 } else {
-                    captured_ms.max(times[i - 1] + 1)
-                };
+                    times[i] = captured_ms.max(times[i - 1] + 1);
+                }
             }
         }
         None => {
-            for (i, time) in times.iter_mut().enumerate() {
-                *time = captured_ms + i as i64;
+            for i in 0..n {
+                if !from_at[i] {
+                    times[i] = if i > 0 && from_at[i - 1] { times[i - 1] + 1 } else { captured_ms + i as i64 };
+                }
             }
         }
     }
@@ -324,7 +344,7 @@ mod tests {
             messages: messages
                 .iter()
                 .enumerate()
-                .map(|(index, (role, text))| Message { index: index as i64, role: (*role).into(), text: (*text).into(), id: None })
+                .map(|(index, (role, text))| Message { index: index as i64, role: (*role).into(), text: (*text).into(), id: None, at: None })
                 .collect(),
         }
     }
@@ -457,7 +477,7 @@ mod tests {
             messages: rows
                 .iter()
                 .enumerate()
-                .map(|(i, (id, role, text))| Message { index: i as i64, role: (*role).into(), text: (*text).into(), id: Some((*id).into()) })
+                .map(|(i, (id, role, text))| Message { index: i as i64, role: (*role).into(), text: (*text).into(), id: Some((*id).into()), at: None })
                 .collect(),
         };
         ingest(&mut conn, &with_ids("2026-10-16T01:00:00.000Z", &[("m3", "user", "同じ"), ("m4", "assistant", "答え")]))?;
@@ -471,6 +491,43 @@ mod tests {
         let (tool, project): (String, String) =
             conn.query_row("SELECT source_tool, project_path FROM sessions", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
         assert_eq!((tool.as_str(), project.as_str()), ("chatgpt_web", "chatgpt.com"));
+        Ok(())
+    }
+
+    #[test]
+    fn uses_the_times_the_screen_shows() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        let msg = |index: i64, role: &str, text: &str, id: &str, at: Option<&str>| Message {
+            index,
+            role: role.into(),
+            text: text.into(),
+            id: Some(id.into()),
+            at: at.map(Into::into),
+        };
+        let p = Payload {
+            source: CHATGPT_WEB_TOOL.into(),
+            conversation_id: "conv-1111".into(),
+            title: None,
+            captured_at: "2026-10-16T01:00:00.000Z".into(),
+            messages: vec![
+                msg(0, "user", "5月の質問", "u1", Some("2026-05-12T01:29:15.635Z")),
+                msg(1, "assistant", "5月の答え", "a1", None),
+                msg(2, "user", "10月の質問", "u2", Some("2026-10-15T09:00:00.000Z")),
+                msg(3, "assistant", "10月の答え", "a2", None),
+                msg(4, "user", "未来の時刻", "u3", Some("2099-01-01T00:00:00.000Z")), // 取り込んだ時刻より先のものは使わない
+            ],
+        };
+        ingest(&mut conn, &p)?;
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT content, occurred_at FROM events ORDER BY occurred_at ASC, id ASC")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(rows[0], ("5月の質問".into(), "2026-05-12T01:29:15.635Z".into()));
+        assert_eq!(rows[1], ("5月の答え".into(), "2026-05-12T01:29:15.636Z".into())); // 直後の回答は +1ms
+        assert_eq!(rows[2], ("10月の質問".into(), "2026-10-15T09:00:00.000Z".into()));
+        assert_eq!(rows[3], ("10月の答え".into(), "2026-10-15T09:00:00.001Z".into()));
+        assert_eq!(rows[4].0, "未来の時刻");
+        assert!(rows[4].1.starts_with("2026-10-16T01:00:00")); // 取り込んだ時刻(回答の直後ではなく、末尾)
         Ok(())
     }
 }

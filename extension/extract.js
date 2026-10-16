@@ -5,7 +5,7 @@
 //     - あなたの発言: <user-query>（本文は .query-text-line の並び。無ければ読み上げ用の見出しを除いた文字）
 //     - Gemini の回答: <message-content>
 //   ChatGPT (chatgpt.com)
-//     - どちらも [data-message-author-role="user" | "assistant"]。data-message-id が発言ごとの ID
+//     - 発言の枠は [data-chatgpt-search-unit-key]（…:user / …:assistant）。今見ているページ（active-page=true）だけ読む
 (function (root) {
   const lastSegmentOk = (s) => !!s && /^[A-Za-z0-9_-]{4,}$/.test(s);
 
@@ -52,20 +52,54 @@
     return null;
   }
 
+  // 本文を取る。回答の「ChatGPT の発言:」のような、読み上げ用の見出し（h4）は除く。
+  function chatgptUnitText(unit) {
+    const body = unit.querySelector("[data-chatgpt-selection-message-id]");
+    if (body) return (body.innerText || "").trim();
+    const clone = unit.cloneNode(true);
+    clone.querySelectorAll("h4").forEach((e) => e.remove());
+    return (clone.innerText || "").trim();
+  }
+
   function chatgptConversation(doc, loc) {
     const id = chatgptConversationId(loc.pathname);
     if (!id) return null;
+    // 画面の裏に、ほかの会話のページが残っている。今見ているページ（active-page=true）だけを読む。
+    const scope = doc.querySelector('[data-app-shell-active-page="true"]') || doc;
     const messages = [];
-    doc.querySelectorAll("[data-message-author-role]").forEach((node) => {
-      const role = node.getAttribute("data-message-author-role");
-      if (role !== "user" && role !== "assistant") return; // system や tool は取らない
-      const text = (node.innerText || "").trim();
+    // 現在の画面: 発言ごとの枠 [data-chatgpt-search-unit-key="…:user" | "…:assistant"]
+    //   発言の ID は data-chatgpt-search-message-ids、発言の時刻は、その往復の <time datetime>
+    scope.querySelectorAll("[data-chatgpt-search-unit-key]").forEach((unit) => {
+      const key = unit.getAttribute("data-chatgpt-search-unit-key") || "";
+      const role = key.endsWith(":user") ? "user" : key.endsWith(":assistant") ? "assistant" : null;
+      if (!role) return;
+      const turn = unit.closest("[data-turn-key]");
+      const mark = (turn || unit).querySelector("[data-chatgpt-selection-conversation-id]");
+      if (mark && !loc.pathname.includes(mark.getAttribute("data-chatgpt-selection-conversation-id"))) return; // ほかの会話
+      const text = chatgptUnitText(unit);
       if (!text) return;
       const message = { index: messages.length, role, text };
-      const own = node.getAttribute("data-message-id");
+      const own = (unit.getAttribute("data-chatgpt-search-message-ids") || "").split(/[\s,]+/)[0];
       if (own) message.id = own;
+      if (role === "user") {
+        const time = turn && turn.querySelector("time[datetime]");
+        if (time) message.at = time.getAttribute("datetime");
+      }
       messages.push(message);
     });
+    // 以前の画面: [data-message-author-role]。現在の画面で何も取れなかったときだけ試す。
+    if (!messages.length) {
+      scope.querySelectorAll("[data-message-author-role]").forEach((node) => {
+        const role = node.getAttribute("data-message-author-role");
+        if (role !== "user" && role !== "assistant") return; // system や tool は取らない
+        const text = (node.innerText || "").trim();
+        if (!text) return;
+        const message = { index: messages.length, role, text };
+        const own = node.getAttribute("data-message-id");
+        if (own) message.id = own;
+        messages.push(message);
+      });
+    }
     // 画面のタブの題名が、会話の題名になっている（まだ付く前の "ChatGPT" だけのときは使わない）
     const tabTitle = (doc.title || "").replace(/\s+/g, " ").trim();
     return finish("chatgpt_web", id, tabTitle && tabTitle !== "ChatGPT" ? tabTitle.slice(0, 80) : null, messages);
