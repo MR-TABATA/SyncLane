@@ -43,7 +43,18 @@ xcrun notarytool submit "$OUT/app.zip" --keychain-profile "$NOTARY_PROFILE" --wa
 xcrun stapler staple "$APP"
 
 echo "== 更新用の tar.gz に署名(公証済みの .app を固める)"
-tar -czf "$OUT/$TGZ_NAME" -C "$APP_DIR" SyncLane.app
+# COPYFILE_DISABLE=1: macOS の tar は、拡張属性を「._ で始まるファイル」として混ぜる。それが入っていると、
+# アプリの自動更新が展開に失敗する(0.2.0 で起きた)ので、混ぜない。
+COPYFILE_DISABLE=1 tar -czf "$OUT/$TGZ_NAME" -C "$APP_DIR" SyncLane.app
+# 念のため、生のアーカイブを読んで、._ が無いことを確かめる(macOS の tar は ._ を一覧から隠すので、Python で読む)
+python3 - "$OUT/$TGZ_NAME" <<'PY'
+import sys, tarfile
+names = tarfile.open(sys.argv[1]).getnames()
+bad = [n for n in names if any(part.startswith("._") for part in n.split("/"))]
+if bad:
+    sys.exit("更新用の tar.gz に ._ のファイルが混ざっています: %s" % bad)
+print("更新用の tar.gz: %d 項目、._ なし" % len(names))
+PY
 TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$KEY_PASS" \
   $TAURI signer sign "$OUT/$TGZ_NAME"
 
