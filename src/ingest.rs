@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// ブラウザ拡張から届く、Web 版の Gemini の会話。
 pub const GEMINI_WEB_TOOL: &str = "gemini_web";
@@ -41,8 +42,7 @@ fn validate(payload: &Payload) -> Result<()> {
     if id.is_empty() || id.len() > 200 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         bail!("invalid conversation_id");
     }
-    let at = &payload.captured_at;
-    if at.len() < 10 || at.len() > 40 || !at.chars().all(|c| c.is_ascii_digit() || "T:-.Z+".contains(c)) {
+    if parse_iso_ms(&payload.captured_at).is_none() {
         bail!("invalid captured_at");
     }
     if payload.messages.len() > MAX_MESSAGES {
@@ -59,10 +59,62 @@ fn validate(payload: &Payload) -> Result<()> {
     Ok(())
 }
 
+/// FNV-1a(64bit)。版が変わっても同じ値になる(DefaultHasher は保証がないので使わない)。
+fn fnv(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+struct Item<'a> {
+    id: String,
+    role: &'a str,
+    text: &'a str,
+}
+
+/// 画面の並びの番号には頼らず、発言の中身から ID を作る。
+/// Gemini は長い会話の古い発言を、あとから足すことがある。番号だと、そのときずれる。
+///   あなたの発言: 文面のハッシュ + 同じ文面の何回目か
+///   Gemini の回答: 直前のあなたの発言に紐づける(+ その発言への何番目の回答か)
+fn items<'a>(conversation_id: &str, messages: &'a [Message]) -> Vec<Item<'a>> {
+    let mut out = Vec::new();
+    let mut seen: HashMap<u64, usize> = HashMap::new();
+    let mut turn: Option<(u64, usize)> = None;
+    let mut answers = 0;
+    for message in messages {
+        let text = message.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let id = if message.role == "user" {
+            let hash = fnv(text);
+            let nth = seen.entry(hash).or_insert(0);
+            let id = format!("{conversation_id}:u:{hash:016x}:{nth}");
+            turn = Some((hash, *nth));
+            *nth += 1;
+            answers = 0;
+            id
+        } else {
+            let id = match turn {
+                Some((hash, nth)) => format!("{conversation_id}:a:{hash:016x}:{nth}:{answers}"),
+                None => format!("{conversation_id}:a:start:{answers}"),
+            };
+            answers += 1;
+            id
+        };
+        out.push(Item { id, role: if message.role == "user" { "user" } else { "assistant" }, text });
+    }
+    out
+}
+
 pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> {
     validate(payload)?;
     let tool = payload.source.as_str();
     let source_file = format!("gemini.google.com/{}", payload.conversation_id);
+    let captured_ms = parse_iso_ms(&payload.captured_at).expect("validated");
 
     let tx = conn.transaction()?;
     let session_id = match tx
@@ -84,37 +136,94 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
         }
     };
 
-    let mut report = IngestReport::default();
-    for message in &payload.messages {
-        let text = message.text.trim();
-        if text.is_empty() {
-            continue;
+    // 最初の試作で使った、番号の ID(`…:0:user` の形)の行は消して、入れ直す
+    tx.execute(
+        "DELETE FROM events WHERE session_id = ?1 AND (source_event_id LIKE '%:user' OR source_event_id LIKE '%:assistant')",
+        params![session_id],
+    )?;
+
+    struct Known {
+        occurred_at: String,
+        sequence: i64,
+        content: String,
+    }
+    let mut known: HashMap<String, Known> = HashMap::new();
+    {
+        let mut stmt = tx.prepare("SELECT source_event_id, occurred_at, sequence, content FROM events WHERE session_id = ?1")?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, Known { occurred_at: row.get(1)?, sequence: row.get(2)?, content: row.get(3)? }))
+        })?;
+        for row in rows {
+            let (id, value) = row?;
+            known.insert(id, value);
         }
-        let event_id = format!("{}:{}:{}", payload.conversation_id, message.index, message.role);
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT content FROM events WHERE source_tool = ?1 AND source_event_id = ?2",
-                params![tool, event_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        match existing {
+    }
+    let max_sequence = known.values().map(|k| k.sequence).max();
+
+    let items = items(&payload.conversation_id, &payload.messages);
+    let first_known = items.iter().position(|item| known.contains_key(&item.id));
+    let last_known = items.iter().rposition(|item| known.contains_key(&item.id));
+
+    // 画面の並びの番号(sequence)は、すでにある発言を基準にそろえる。基準が無ければ、末尾に足す
+    let offset = match first_known {
+        Some(f) => known[&items[f].id].sequence - f as i64,
+        None => max_sequence.map_or(0, |max| max + 1),
+    };
+
+    // 時刻: すでにある発言は変えない。あとから読み込まれた古い発言は、基準より前に、1ms ずつずらして置く
+    // (画面は時刻順に並べるので、こうすると会話の順番が保たれる)
+    let known_ms = |id: &str| parse_iso_ms(&known[id].occurred_at).unwrap_or(captured_ms);
+    let mut times = vec![0i64; items.len()];
+    match first_known {
+        Some(f) => {
+            times[f] = known_ms(&items[f].id);
+            for i in (0..f).rev() {
+                times[i] = times[i + 1] - 1;
+            }
+            for i in f + 1..items.len() {
+                times[i] = if known.contains_key(&items[i].id) {
+                    known_ms(&items[i].id)
+                } else if last_known.is_some_and(|l| i < l) {
+                    times[i - 1] + 1
+                } else {
+                    captured_ms.max(times[i - 1] + 1)
+                };
+            }
+        }
+        None => {
+            for (i, time) in times.iter_mut().enumerate() {
+                *time = captured_ms + i as i64;
+            }
+        }
+    }
+
+    let mut report = IngestReport::default();
+    for (i, item) in items.iter().enumerate() {
+        let sequence = i as i64 + offset;
+        match known.get(&item.id) {
             None => {
                 tx.execute(
                     "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![session_id, tool, event_id, payload.captured_at, message.role, text, message.index],
+                    params![session_id, tool, item.id, format_iso_ms(times[i]), item.role, item.text, sequence],
                 )?;
                 report.inserted += 1;
             }
-            Some(old) if old != text => {
-                tx.execute(
-                    "UPDATE events SET content = ?3 WHERE source_tool = ?1 AND source_event_id = ?2",
-                    params![tool, event_id, text],
-                )?;
-                report.updated += 1;
+            Some(old) => {
+                if old.content != item.text {
+                    tx.execute(
+                        "UPDATE events SET content = ?3 WHERE source_tool = ?1 AND source_event_id = ?2",
+                        params![tool, item.id, item.text],
+                    )?;
+                    report.updated += 1;
+                }
+                if old.sequence != sequence {
+                    tx.execute(
+                        "UPDATE events SET sequence = ?3 WHERE source_tool = ?1 AND source_event_id = ?2",
+                        params![tool, item.id, sequence],
+                    )?;
+                }
             }
-            Some(_) => {}
         }
     }
     if let Some(title) = payload.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
@@ -127,28 +236,99 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
     Ok(report)
 }
 
+// ---- 時刻(ISO 8601、`2026-10-16T01:00:00.000Z` の形)をミリ秒で足し引きする ----
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+fn parse_iso_ms(text: &str) -> Option<i64> {
+    let text = text.strip_suffix('Z')?;
+    let (date_time, fraction) = match text.split_once('.') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (text, None),
+    };
+    let (date, time) = date_time.split_once('T')?;
+    let mut d = date.split('-');
+    let (y, m, day): (i64, i64, i64) = (d.next()?.parse().ok()?, d.next()?.parse().ok()?, d.next()?.parse().ok()?);
+    let mut t = time.split(':');
+    let (h, mi, sec): (i64, i64, i64) = (t.next()?.parse().ok()?, t.next()?.parse().ok()?, t.next()?.parse().ok()?);
+    if d.next().is_some() || t.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&day) || h > 23 || mi > 59 || sec > 60 {
+        return None;
+    }
+    let ms = match fraction {
+        None => 0,
+        Some(f) if !f.is_empty() && f.len() <= 9 && f.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{:0<3}", &f[..f.len().min(3)]).parse::<i64>().ok()?
+        }
+        _ => return None,
+    };
+    Some(((days_from_civil(y, m, day) * 24 + h) * 60 + mi) * 60_000 + sec * 1000 + ms)
+}
+
+fn format_iso_ms(ms: i64) -> String {
+    let days = ms.div_euclid(86_400_000);
+    let rest = ms.rem_euclid(86_400_000);
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rest / 3_600_000,
+        rest / 60_000 % 60,
+        rest / 1000 % 60,
+        rest % 1000
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db;
 
-    fn payload(messages: &[(i64, &str, &str)]) -> Payload {
+    fn payload_at(at: &str, messages: &[(&str, &str)]) -> Payload {
         Payload {
             source: GEMINI_WEB_TOOL.into(),
             conversation_id: "abc123".into(),
             title: Some("フリーWi-Fi".into()),
-            captured_at: "2026-10-16T01:00:00.000Z".into(),
+            captured_at: at.into(),
             messages: messages
                 .iter()
-                .map(|(index, role, text)| Message { index: *index, role: (*role).into(), text: (*text).into() })
+                .enumerate()
+                .map(|(index, (role, text))| Message { index: index as i64, role: (*role).into(), text: (*text).into() })
                 .collect(),
         }
+    }
+
+    fn payload(messages: &[(&str, &str)]) -> Payload {
+        payload_at("2026-10-16T01:00:00.000Z", messages)
+    }
+
+    /// 画面と同じ並び(時刻、同じなら ID)で、中身を取り出す。
+    fn ordered(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("SELECT content FROM events ORDER BY occurred_at ASC, id ASC").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
     }
 
     #[test]
     fn inserts_once_and_is_idempotent() -> Result<()> {
         let mut conn = db::open_memory()?;
-        let p = payload(&[(0, "user", "質問"), (1, "assistant", "回答")]);
+        let p = payload(&[("user", "質問"), ("assistant", "回答")]);
         assert_eq!(ingest(&mut conn, &p)?, IngestReport { inserted: 2, updated: 0 });
         assert_eq!(ingest(&mut conn, &p)?, IngestReport::default());
         let counts = db::counts(&conn)?;
@@ -159,19 +339,63 @@ mod tests {
     #[test]
     fn updates_a_growing_answer_and_adds_new_turns() -> Result<()> {
         let mut conn = db::open_memory()?;
-        ingest(&mut conn, &payload(&[(0, "user", "質問"), (1, "assistant", "回")]))?;
-        let report = ingest(&mut conn, &payload(&[(0, "user", "質問"), (1, "assistant", "回答です"), (2, "user", "続き")]))?;
+        ingest(&mut conn, &payload(&[("user", "質問"), ("assistant", "回")]))?;
+        let report = ingest(&mut conn, &payload_at("2026-10-16T01:00:05.000Z", &[("user", "質問"), ("assistant", "回答です"), ("user", "続き")]))?;
         assert_eq!(report, IngestReport { inserted: 1, updated: 1 });
-        let content: String = conn.query_row("SELECT content FROM events WHERE sequence = 1", [], |r| r.get(0))?;
-        assert_eq!(content, "回答です");
-        assert_eq!(db::counts(&conn)?.events, 3);
+        assert_eq!(ordered(&conn), vec!["質問", "回答です", "続き"]);
+        Ok(())
+    }
+
+    #[test]
+    fn older_turns_loaded_later_keep_the_conversation_order() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        // 先に、新しい 2 往復だけが見えていた
+        ingest(&mut conn, &payload(&[("user", "Q3"), ("assistant", "A3"), ("user", "Q4"), ("assistant", "A4")]))?;
+        // スクロールで、古い 2 往復が足された
+        let report = ingest(
+            &mut conn,
+            &payload_at(
+                "2026-10-16T01:05:00.000Z",
+                &[("user", "Q1"), ("assistant", "A1"), ("user", "Q2"), ("assistant", "A2"), ("user", "Q3"), ("assistant", "A3"), ("user", "Q4"), ("assistant", "A4")],
+            ),
+        )?;
+        assert_eq!(report, IngestReport { inserted: 4, updated: 0 });
+        assert_eq!(ordered(&conn), vec!["Q1", "A1", "Q2", "A2", "Q3", "A3", "Q4", "A4"]);
+        // 開き直して、また新しい分だけが見えても、増えず、順番も崩れない
+        let report = ingest(&mut conn, &payload_at("2026-10-16T02:00:00.000Z", &[("user", "Q4"), ("assistant", "A4"), ("user", "Q5")]))?;
+        assert_eq!(report, IngestReport { inserted: 1, updated: 0 });
+        assert_eq!(ordered(&conn), vec!["Q1", "A1", "Q2", "A2", "Q3", "A3", "Q4", "A4", "Q5"]);
+        assert_eq!(db::counts(&conn)?.events, 9);
+        Ok(())
+    }
+
+    #[test]
+    fn identical_messages_stay_separate() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        let p = payload(&[("user", "はい"), ("assistant", "了解"), ("user", "はい"), ("assistant", "了解")]);
+        assert_eq!(ingest(&mut conn, &p)?.inserted, 4);
+        assert_eq!(ingest(&mut conn, &p)?, IngestReport::default());
+        Ok(())
+    }
+
+    #[test]
+    fn removes_rows_from_the_old_numbered_format() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        ingest(&mut conn, &payload(&[("user", "質問")]))?;
+        let session: i64 = conn.query_row("SELECT id FROM sessions", [], |r| r.get(0))?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'gemini_web', 'abc123:0:user', '2026-10-16T00:00:00.000Z', 'user', '質問', 0)",
+            [session],
+        )?;
+        ingest(&mut conn, &payload(&[("user", "質問")]))?;
+        assert_eq!(db::counts(&conn)?.events, 1);
         Ok(())
     }
 
     #[test]
     fn saves_title_and_is_searchable_as_gemini_web() -> Result<()> {
         let mut conn = db::open_memory()?;
-        ingest(&mut conn, &payload(&[(0, "user", "FreeWifiでAIチャットをすると？")]))?;
+        ingest(&mut conn, &payload(&[("user", "FreeWifiでAIチャットをすると？")]))?;
         let events = db::timeline(&conn, None, Some("FreeWifi"), 10)?;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].source_tool, "gemini_web");
@@ -182,19 +406,29 @@ mod tests {
     #[test]
     fn rejects_bad_payloads_without_writing() -> Result<()> {
         let mut conn = db::open_memory()?;
-        let mut p = payload(&[(0, "user", "x")]);
+        let mut p = payload(&[("user", "x")]);
         p.source = "evil".into();
         assert!(ingest(&mut conn, &p).is_err());
-        let mut p = payload(&[(0, "system", "x")]);
-        p.conversation_id = "abc123".into();
+        let p = payload(&[("system", "x")]);
         assert!(ingest(&mut conn, &p).is_err());
-        let mut p = payload(&[(0, "user", "x")]);
+        let mut p = payload(&[("user", "x")]);
         p.conversation_id = "../etc".into();
         assert!(ingest(&mut conn, &p).is_err());
-        let mut p = payload(&[(0, "user", "x")]);
+        let mut p = payload(&[("user", "x")]);
         p.captured_at = "now'; DROP TABLE events;--".into();
         assert!(ingest(&mut conn, &p).is_err());
         assert_eq!(db::counts(&conn)?.sessions, 0);
         Ok(())
+    }
+
+    #[test]
+    fn iso_time_round_trips_and_shifts_across_days() {
+        let ms = parse_iso_ms("2026-10-16T00:00:00.000Z").unwrap();
+        assert_eq!(format_iso_ms(ms), "2026-10-16T00:00:00.000Z");
+        assert_eq!(format_iso_ms(ms - 1), "2026-10-15T23:59:59.999Z");
+        assert_eq!(format_iso_ms(parse_iso_ms("2024-02-29T12:34:56Z").unwrap()), "2024-02-29T12:34:56.000Z");
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(parse_iso_ms("2026-13-01T00:00:00Z"), None);
+        assert_eq!(parse_iso_ms("2026-10-16 00:00:00"), None);
     }
 }
