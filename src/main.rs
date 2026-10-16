@@ -63,6 +63,18 @@ enum ImportSource {
         #[arg(long, conflicts_with = "date")]
         all: bool,
     },
+    /// Import Codex (ChatGPT Codex app / Codex CLI) sessions.
+    Codex {
+        /// Codex sessions directory. Defaults to ~/.codex/sessions.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Import only events whose timestamp starts with YYYY-MM-DD.
+        #[arg(long)]
+        date: Option<String>,
+        /// Import all events in the Codex sessions directory.
+        #[arg(long, conflicts_with = "date")]
+        all: bool,
+    },
 }
 
 fn main() {
@@ -138,6 +150,21 @@ fn run() -> Result<()> {
                 let report = importer::import_gemini(&root, date_filter, &mut conn)?;
                 println!("root: {}", root.display());
                 println!("scope: {}", if date_filter.is_some() { date_filter.unwrap() } else { "all" });
+                println!("files: {}", report.files);
+                println!("sessions: {}", report.sessions);
+                println!("events added: {}", report.events);
+                println!("skipped lines: {}", report.skipped_lines);
+            }
+            ImportSource::Codex { root, date, all } => {
+                let root = root.unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                        .join(".codex")
+                        .join("sessions")
+                });
+                let date_filter = if all { None } else { date.as_deref() };
+                let report = importer::import_codex(&root, date_filter, &mut conn)?;
+                println!("root: {}", root.display());
+                println!("scope: {}", date_filter.unwrap_or("all"));
                 println!("files: {}", report.files);
                 println!("sessions: {}", report.sessions);
                 println!("events added: {}", report.events);

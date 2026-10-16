@@ -13,7 +13,7 @@ An app (macOS) that saves your conversations with AI tools such as Claude Code o
 
 Download the dmg from [mrktools.app/en/synclane/download/](https://mrktools.app/en/synclane/download/) and put `SyncLane.app` in `/Applications`. It is signed and notarized, and the app tells you when a new version is out.
 
-While the app is running, it imports new Claude Code conversations (`~/.claude/projects`) every 30 seconds.
+While the app is running, it imports new Claude Code conversations (`~/.claude/projects`) and new Codex conversations (`~/.codex/sessions`) every 30 seconds.
 
 ## Importing Gemini and ChatGPT conversations (Chrome extension)
 
@@ -110,6 +110,19 @@ cargo run -- import gemini --all
 ```
 
 Omitting `--date` also targets every event, but use `--all` when you mean to import everything. `--date` and `--all` cannot be combined. Importing is idempotent: running it again on the same log does not duplicate events.
+
+### Importing Codex logs
+
+`import codex` reads `~/.codex/sessions/**/rollout-*.jsonl` (logs of the ChatGPT Codex app and the Codex CLI) and appends your messages (`UserMessage`) and Codex's replies (`AgentMessage`). Reasoning, command runs and file changes are not saved. The project comes from the working folder in the log (`cwd`), and the title from the first message.
+
+```sh
+cargo run -- import codex --date YYYY-MM-DD
+cargo run -- import codex --all
+```
+
+- Codex logs can reach hundreds of MB. The app remembers how far it has read and reads only what was appended.
+- Branching or duplicating a conversation copies the original history into a new file. A message is saved once and stays in the original session (the copy holds only the messages after the branch).
+- Work run on "This computer" in the app does not appear on the ChatGPT website. Import it from the Codex logs (this folder).
 
 ### Checking the timeline
 

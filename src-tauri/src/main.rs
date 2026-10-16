@@ -153,6 +153,37 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
 }
 
+fn collect_codex(conn: &Arc<Mutex<Connection>>, root: &std::path::Path, handle: &tauri::AppHandle) {
+    let files = match importer::codex_files(root) {
+        Ok(files) => files,
+        Err(error) => return eprintln!("synclane codex: {error:#}"),
+    };
+    let mut added = 0;
+    for path in files {
+        let offset = match conn.lock() {
+            Ok(conn) => importer::codex_saved_offset(&conn, &path),
+            Err(_) => return,
+        };
+        let parsed = match offset.and_then(|offset| importer::parse_codex_file(&path, offset, None)) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                eprintln!("synclane codex: {}: {error:#}", path.display());
+                continue;
+            }
+        };
+        let mut report = importer::ImportReport::default();
+        if let Ok(mut conn) = conn.lock() {
+            match importer::store_codex(&mut conn, &path, &parsed, true, &mut report) {
+                Ok(()) => added += report.events,
+                Err(error) => eprintln!("synclane codex: {}: {error:#}", path.display()),
+            }
+        }
+    }
+    if added > 0 {
+        let _ = handle.emit("events-updated", added);
+    }
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == "--mcp") {
         run_mcp();
@@ -184,6 +215,7 @@ fn main() {
                         eprintln!("synclane title backfill: {error:#}");
                     }
                 }
+                let codex_root = home.join(".codex").join("sessions");
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {
@@ -195,6 +227,9 @@ fn main() {
                             Err(error) => eprintln!("synclane collector: {error:#}"),
                         }
                     }
+                    // Codex のログは数百 MB になる。読んで解析する間は DB のロックを持たず、書くときだけ持つ
+                    // (初回の取り込みで、画面が固まらないように)
+                    collect_codex(&collector_conn, &codex_root, &handle);
                     thread::sleep(Duration::from_secs(30));
                 }
             });

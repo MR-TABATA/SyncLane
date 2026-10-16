@@ -13,7 +13,7 @@ Claude Code などのAIとの会話を、自分のPCに保存して、あとか�
 
 [mrktools.app/ja/synclane/download/](https://mrktools.app/ja/synclane/download/) から、dmg をダウンロードして、`SyncLane.app` を `/Applications` に入れます。署名・公証済みで、新しい版は、アプリが自動で知らせます。
 
-アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)を取り込みます。
+アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)を取り込みます。
 
 ## Gemini・ChatGPT の会話を取り込む(Chrome 拡張)
 
@@ -110,6 +110,19 @@ cargo run -- import gemini --all
 ```
 
 `--date` を省略しても全イベントが対象になるが、明示的に取り込む場合は `--all` を使う。`--date` と `--all` は同時に指定できない。取り込みは冪等で、同じログを再実行してもイベントは重複しない。
+
+### Codexログの取り込み
+
+`import codex` は `~/.codex/sessions/**/rollout-*.jsonl`(ChatGPT の Codex アプリと Codex CLI のログ)を読み、ユーザーの発言(`UserMessage`)と Codex の回答(`AgentMessage`)を追記する。考え中の表示・コマンドの実行・ファイルの変更などは保存しない。プロジェクトは、ログの作業フォルダ(`cwd`)から付け、題名は最初の発言から付ける。
+
+```sh
+cargo run -- import codex --date YYYY-MM-DD
+cargo run -- import codex --all
+```
+
+- Codex のログは数百MBになる。アプリは、読み終えた位置を覚えて、追記された分だけを読む。
+- 会話を分岐・複製すると、元の履歴が新しいファイルにコピーされる。同じ発言は1件だけ保存し、元のセッションに残す(複製側には、その後の発言が入る)。
+- ChatGPT の Web 版には、アプリの「このコンピューター」で動かした作業は出ない。Codex のログ(このフォルダ)から取り込む。
 
 ### タイムラインの確認
 
