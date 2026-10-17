@@ -1,4 +1,5 @@
 mod ingest_server;
+mod sync_app;
 
 use synclane::{db, importer};
 use synclane::db::TimelineEvent;
@@ -10,7 +11,7 @@ use std::time::Duration;
 use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-struct AppState(Arc<Mutex<Connection>>);
+pub struct AppState(pub Arc<Mutex<Connection>>);
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -192,14 +193,18 @@ fn main() {
     let conn = db::open(&path).expect("failed to open SyncLane database");
 
     let shared_conn = Arc::new(Mutex::new(conn));
+    let sync_state = sync_app::SyncState::new(path.clone());
     let collector_conn = Arc::clone(&shared_conn);
     let ingest_conn = Arc::clone(&shared_conn);
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState(shared_conn))
+        .manage(sync_state.clone())
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
+            // サーバーへの送信(接続したときだけ動く。接続していなければ、何もしない)
+            sync_app::spawn_loop(sync_state, app.handle().clone());
             // ブラウザ拡張(Web 版の Gemini)からの取り込みを受ける
             let ingest_handle = app.handle().clone();
             ingest_server::spawn(ingest_server::ADDRESS, Arc::clone(&ingest_conn), move |changed| {
@@ -235,7 +240,12 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, timeline, mcp_executable, open_search_window, close_search_window])
+        .invoke_handler(tauri::generate_handler![
+            status, timeline, mcp_executable, open_search_window, close_search_window,
+            sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
+            sync_app::sync_select_all, sync_app::sync_connect, sync_app::sync_connect_cancel,
+            sync_app::sync_disconnect, sync_app::sync_now
+        ])
         .run(tauri::generate_context!())
         .expect("error while running SyncLane");
 }

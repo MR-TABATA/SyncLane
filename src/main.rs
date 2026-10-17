@@ -241,19 +241,6 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn open_in_browser(url: &str) {
-    let result = if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(url).status()
-    } else if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd").args(["/C", "start", "", url]).status()
-    } else {
-        std::process::Command::new("xdg-open").arg(url).status()
-    };
-    if result.map(|s| !s.success()).unwrap_or(true) {
-        println!("(ブラウザを開けませんでした。上のアドレスを自分で開いてください)");
-    }
-}
-
 fn require_connection(conn: &rusqlite::Connection) -> Result<store::ServerConnection> {
     store::load_connection(conn)?.ok_or_else(|| anyhow::anyhow!("サーバーに接続していません。`synclane server connect <URL>` で接続してください"))
 }
@@ -272,7 +259,9 @@ fn server_command(conn: &rusqlite::Connection, action: ServerAction) -> Result<(
             println!("  コード: {}", pending.start.user_code);
             println!("  アドレス: {}", pending.start.verification_uri_complete);
             println!("  端末の名前: {name}");
-            open_in_browser(&pending.start.verification_uri_complete);
+            if !device_flow::open_in_browser(&pending.start.verification_uri_complete) {
+                println!("(ブラウザを開けませんでした。上のアドレスを自分で開いてください)");
+            }
             println!("承認を待っています…(Ctrl+C で中止)");
             let connection = device_flow::finish(conn, &transport, &secrets, &pending, &std::thread::sleep, &|| false)?;
             println!("接続しました: {} ({} / {})", connection.server, connection.user_name, connection.user_email);

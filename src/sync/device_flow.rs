@@ -85,6 +85,18 @@ pub fn default_device_name() -> String {
     name.or_else(|| from_command("hostname", &[])).unwrap_or_else(|| "SyncLane".to_string())
 }
 
+/// 既定のブラウザで URL を開く。開けなければ false(その場合は、画面に URL を出して、自分で開いてもらう)。
+pub fn open_in_browser(url: &str) -> bool {
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).status()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd").args(["/C", "start", "", url]).status()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).status()
+    };
+    status.map(|s| s.success()).unwrap_or(false)
+}
+
 /// サーバーに接続できるかを確かめ、登録のコードを受け取る。
 pub fn begin(t: &dyn Transport, input_url: &str, device_name: &str, app_version: &str) -> Result<Pending> {
     let server = normalize_server_url(input_url)?;

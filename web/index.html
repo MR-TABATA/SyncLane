@@ -130,6 +130,19 @@
     .color-custom input[type="color"] { position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px); padding: 0; border: none; background: none; cursor: pointer; }
     .note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
     .note.warn { margin-top: 14px; color: var(--text); }
+    .sync-code { margin: 4px 0 10px; font: 600 28px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; color: var(--text); }
+    .sync-connected { margin: 0 0 4px; color: var(--text); font-weight: 600; font-size: 13px; }
+    .sync-radios { display: grid; gap: 8px; margin-bottom: 10px; }
+    .sync-radio { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+    .sync-radio input { margin-top: 3px; }
+    .sync-radio-note { display: block; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .sync-list { margin: 8px 0; max-height: 280px; overflow: auto; border: 1px solid var(--input-border); border-radius: 6px; }
+    .sync-row { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--input-border); font-size: 12px; cursor: pointer; }
+    .sync-row:last-child { border-bottom: 0; }
+    .sync-row .sync-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .sync-row .sync-meta { grid-column: 2; color: var(--faint); font-size: 11px; }
+    .sync-row .sync-state { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); font-size: 11px; }
+    .sync-row.send .sync-state { color: var(--accent); font-weight: 600; }
     textarea.code { width: 100%; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; resize: none; }
     .radio-row { display: flex; flex-direction: column; gap: 6px; }
     .radio-row label { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 13px; }
@@ -190,6 +203,7 @@
           <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
           <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
           <button class="settings-nav-item" type="button" data-tab="mcp">MCP</button>
+          <button class="settings-nav-item" type="button" data-tab="server" data-i18n="navServer">サーバー</button>
         </nav>
         <div class="settings-content">
           <section class="settings-pane active" data-pane="appearance">
@@ -215,6 +229,9 @@
             <div class="opt-row"><button id="mcp-desktop-copy" class="mcp-copy" data-target="mcp-desktop" type="button" data-i18n="mcpCopy">コピー</button></div>
             <p class="note warn" data-i18n="mcpWarn">登録すると、その AI は保存した全会話を読めるようになります。会話の中にパスワードやコードが含まれていないか、確認してから登録してください。通信は PC の中だけで、ネットワークには出ません。読み取り専用です。</p>
             <p class="note" data-i18n="mcpMove">アプリを別の場所に移したときは、登録し直してください。</p>
+          </section>
+          <section class="settings-pane" data-pane="server">
+            <div id="sync-root"></div>
           </section>
           <section class="settings-pane" data-pane="lang">
             <div class="opt-title" data-i18n="language">表示する言語</div>
@@ -690,5 +707,6 @@
     if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
     if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">${t('loadFailed')}${escapeHtml(String(err))}</div>`; });
   </script>
+  <script src="sync.js"></script>
 </body>
 </html>
