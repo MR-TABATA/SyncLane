@@ -116,7 +116,7 @@ pub fn clear_connection(conn: &Connection) -> Result<()> {
             conn.execute(&format!("DELETE FROM {table} WHERE server_id = ?1"), [&server])?;
         }
     }
-    for key in [K_SERVER, K_DEVICE, K_USER, "sync.last_result"] {
+    for key in [K_SERVER, K_DEVICE, K_USER, K_MODE, "sync.last_result"] {
         remove(conn, key)?;
     }
     for scope in ["ingest", "search"] {

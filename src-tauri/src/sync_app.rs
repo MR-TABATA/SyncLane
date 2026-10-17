@@ -122,7 +122,7 @@ pub fn sync_overview(app: State<'_, AppState>, sync: State<'_, SyncState>) -> Re
     let conn = app.0.lock().map_err(message)?;
     let overview = ops::overview(&conn).map_err(message)?;
     let connecting = sync.0.connecting.lock().unwrap().as_ref().map(|p| {
-        json!({"server": p.server, "user_code": p.start.user_code, "url": p.start.verification_uri_complete})
+        json!({"server": p.server, "user_code": p.start.user_code, "url": p.start.verification_uri})
     });
     let mut value = serde_json::to_value(overview).map_err(message)?;
     value["blocked"] = json!(*sync.0.blocked.lock().unwrap());
@@ -190,8 +190,8 @@ pub async fn sync_connect(url: String, sync: State<'_, SyncState>, handle: AppHa
     let info = ConnectInfo {
         server: pending.server.clone(),
         user_code: pending.start.user_code.clone(),
-        url: pending.start.verification_uri_complete.clone(),
-        opened: device_flow::open_in_browser(&pending.start.verification_uri_complete),
+        url: pending.start.verification_uri.clone(),
+        opened: device_flow::open_in_browser(&pending.start.verification_uri),
     };
     state.0.cancel.store(false, Ordering::SeqCst);
     *state.0.connecting.lock().unwrap() = Some(pending.clone());

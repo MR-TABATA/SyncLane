@@ -257,9 +257,9 @@ fn server_command(conn: &rusqlite::Connection, action: ServerAction) -> Result<(
             let pending = device_flow::begin(&transport, &url, &name, env!("CARGO_PKG_VERSION"))?;
             println!("ブラウザで次のコードを承認してください。");
             println!("  コード: {}", pending.start.user_code);
-            println!("  アドレス: {}", pending.start.verification_uri_complete);
+            println!("  アドレス: {}", pending.start.verification_uri);
             println!("  端末の名前: {name}");
-            if !device_flow::open_in_browser(&pending.start.verification_uri_complete) {
+            if !device_flow::open_in_browser(&pending.start.verification_uri) {
                 println!("(ブラウザを開けませんでした。上のアドレスを自分で開いてください)");
             }
             println!("承認を待っています…(Ctrl+C で中止)");

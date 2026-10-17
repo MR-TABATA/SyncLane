@@ -162,6 +162,9 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
         <span id="reload-dot" class="dot" hidden></span>
       </button>
+      <button id="server-btn" class="icon-button" type="button" data-i18n-title="navServer" aria-label="サーバー">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-1.1-8.86A6 6 0 0 0 4.8 11.5 3.75 3.75 0 0 0 6.5 19z"/></svg>
+      </button>
       <button id="toggle-search" class="icon-button" type="button" data-i18n-title="search" aria-label="検索">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       </button>
@@ -203,7 +206,7 @@
           <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
           <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
           <button class="settings-nav-item" type="button" data-tab="mcp">MCP</button>
-          <button class="settings-nav-item" type="button" data-tab="server" data-i18n="navServer">サーバー</button>
+          <button class="settings-nav-item" type="button" data-tab="server" data-i18n="navServer" hidden>サーバー</button>
         </nav>
         <div class="settings-content">
           <section class="settings-pane active" data-pane="appearance">
@@ -404,10 +407,13 @@
       if (event.key !== 'synclane-settings' || !event.newValue) return;
       try { settings = sanitize(JSON.parse(event.newValue)); applyAppearance(); applyLang(); } catch (_) {}
     });
-    document.querySelectorAll('.settings-nav-item').forEach((btn) => btn.addEventListener('click', () => {
-      document.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.toggle('active', b === btn));
-      document.querySelectorAll('.settings-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === btn.dataset.tab));
-    }));
+    function showSettingsTab(tab) {
+      document.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+      document.querySelectorAll('.settings-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === tab));
+    }
+    document.querySelectorAll('.settings-nav-item').forEach((btn) => btn.addEventListener('click', () => showSettingsTab(btn.dataset.tab)));
+    // サーバーは設定の一項目ではなく、ヘッダーのアイコンから開く
+    $('server-btn').addEventListener('click', () => { showSettingsTab('server'); $('settings-overlay').hidden = false; });
     async function fillMcpCommand() {
       if (!invoke || $('mcp-command').value) return;
       try {
@@ -424,7 +430,7 @@
       btn.textContent = t('mcpCopied');
       setTimeout(() => { btn.textContent = t('mcpCopy'); }, 1500);
     }));
-    $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; fillMcpCommand(); });
+    $('settings-btn').addEventListener('click', () => { showSettingsTab('appearance'); $('settings-overlay').hidden = false; fillMcpCommand(); });
     $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
     $('settings-overlay').addEventListener('click', (e) => { if (e.target === $('settings-overlay')) $('settings-overlay').hidden = true; });
 

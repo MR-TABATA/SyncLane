@@ -7,7 +7,7 @@
     srvUrl: 'サーバーのアドレス',
     srvUrlPlaceholder: 'https://sync.example.com',
     srvConnect: '接続する',
-    srvCodeTitle: 'ブラウザで、次のコードを承認してください',
+    srvCodeTitle: 'ブラウザで、次のコードを入力してください',
     srvCodeOpened: 'ブラウザを開きました。開かないときは、次のアドレスを自分で開いてください。',
     srvCodeNotOpened: 'ブラウザを開けませんでした。次のアドレスを自分で開いてください。',
     srvWaiting: '承認を待っています…',
@@ -24,7 +24,8 @@
     srvRunning: '送信中…',
     srvSendNow: '今すぐ送る',
     srvDisconnect: '接続を解除',
-    srvDisconnectConfirm: '接続を解除します。送り済みの会話は、サーバーに残ります。よろしいですか。',
+    srvDisconnectConfirm: '接続を解除します。送り済みの会話は、サーバーに残ります。よければ、もう一度押してください。',
+    srvDisconnectYes: '解除する',
     srvBlocked: (m) => `送信を止めています: ${m}`,
     srvBlockedHint: '解決するには、接続を解除して、もう一度つないでください。',
     srvVisibility: '新しく送る会話の公開範囲',
@@ -50,7 +51,7 @@
     srvUrl: 'Server address',
     srvUrlPlaceholder: 'https://sync.example.com',
     srvConnect: 'Connect',
-    srvCodeTitle: 'Approve this code in your browser',
+    srvCodeTitle: 'Enter this code in your browser',
     srvCodeOpened: 'Your browser was opened. If it did not open, open this address yourself.',
     srvCodeNotOpened: 'Could not open your browser. Open this address yourself.',
     srvWaiting: 'Waiting for approval…',
@@ -67,7 +68,8 @@
     srvRunning: 'Sending…',
     srvSendNow: 'Send now',
     srvDisconnect: 'Disconnect',
-    srvDisconnectConfirm: 'Disconnect from the server? Conversations already sent stay on the server.',
+    srvDisconnectConfirm: 'Conversations already sent stay on the server. Press again to disconnect.',
+    srvDisconnectYes: 'Disconnect now',
     srvBlocked: (m) => `Sending is paused: ${m}`,
     srvBlockedHint: 'To fix it, disconnect and connect again.',
     srvVisibility: 'Visibility of conversations sent from now on',
@@ -229,11 +231,20 @@
     const sendNow = el('button', { class: 'primary', type: 'button', disabled: overview.running }, overview.running ? t('srvRunning') : t('srvSendNow'));
     sendNow.addEventListener('click', async () => { await call('sync_now'); setTimeout(() => refresh(false), 600); });
     const disconnect = el('button', { type: 'button' }, t('srvDisconnect'));
+    // WebView では confirm() が出ないので、画面の中で 2 度押しにする
+    const disconnectNote = note(t('srvDisconnectConfirm'), 'warn');
+    disconnectNote.hidden = true;
+    let armed = false;
     disconnect.addEventListener('click', async () => {
-      if (!confirm(t('srvDisconnectConfirm'))) return;
+      if (!armed) {
+        armed = true;
+        disconnectNote.hidden = false;
+        disconnect.textContent = t('srvDisconnectYes');
+        return;
+      }
       await call('sync_disconnect'); message = ''; refresh();
     });
-    children.push(el('div', { class: 'opt-row' }, sendNow, disconnect));
+    children.push(el('div', { class: 'opt-row' }, sendNow, disconnect), disconnectNote);
 
     const vis = el('select', { id: 'sync-visibility' },
       el('option', { value: '' }, t('srvVisDefault')),
