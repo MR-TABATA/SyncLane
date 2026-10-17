@@ -2,7 +2,7 @@
 
 [日本語](README.md) | English
 
-An app (macOS) that saves your conversations with AI tools such as Claude Code, Codex, Gemini and ChatGPT on your own computer, so you can search them later. They are stored only in a local SQLite file and are never sent to a server.
+An app (macOS) that saves your conversations with AI tools such as Claude Code, Codex, Gemini and ChatGPT on your own computer, so you can search them later. They are stored in a local SQLite file. **By default nothing is sent anywhere.** Only if you connect to a SyncLane server (for example one your company runs) are the conversations you choose sent there (optional; see "Send to a server" below).
 
 - Search past conversations by keyword or date
 - Reread a day's conversations with AI in a day-by-day timeline
@@ -47,6 +47,25 @@ Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (cha
 - For message times, ChatGPT uses the time shown on the page. Gemini shows none, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
 - To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
+
+## Send to a server (optional)
+
+If you connect to a SyncLane server (for example one your company runs), you can send the conversations you choose to it over HTTPS, so your team can search past decisions together. The server is provided separately and is not part of this repository.
+
+- **If you do not connect, nothing is sent.** Even after connecting, **nothing is sent by default**: you pick the conversations, or turn on the automatic mode.
+- You connect by approving in your browser (the app never asks for a password). The device token is kept in the macOS keychain.
+- What is sent: the text of the conversation (your messages and the AI's replies), the title, the project path and the times. You can exclude any conversation at any time.
+- The local SQLite file stays the source of truth. If sending fails, importing and local search keep working. Disconnecting deletes the token (conversations already sent stay on the server).
+
+```sh
+synclane server connect https://sync.example.com   # approve in the browser
+synclane sync list                                 # conversations and whether they are sent
+synclane sync include 12 14 --visibility org       # pick conversations (org = visible to everyone on the server)
+synclane sync exclude 13                           # never send this one
+synclane sync mode auto                            # send everything except what you excluded
+synclane sync                                      # send now (the app sends automatically)
+synclane server disconnect
+```
 
 ## Ask your AI (MCP)
 

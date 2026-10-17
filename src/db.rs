@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_versions (
@@ -94,6 +94,53 @@ CREATE TABLE IF NOT EXISTS collector_files (
 
 // セッションの題名(Claude Code が付ける ai-title)。無いツールは NULL
 const MIGRATION_3: &str = "ALTER TABLE sessions ADD COLUMN title TEXT;";
+
+// サーバーへの送信(任意)の記録。本文や題名が書き換わった時刻(updated_at)は、トリガーで入れる
+// (Web の会話は、回答の途中で取り込んだ本文が、あとで完全な本文に更新されるため。送り直しの判定に使う)。
+// 接続先(server_id)ごとに持つので、送信先を変えても、もう片方の記録は壊れない。
+const MIGRATION_4: &str = r#"
+ALTER TABLE events ADD COLUMN updated_at TEXT;
+ALTER TABLE sessions ADD COLUMN updated_at TEXT;
+
+CREATE TRIGGER IF NOT EXISTS events_touch AFTER UPDATE OF content ON events
+BEGIN
+    UPDATE events SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS sessions_touch AFTER UPDATE OF title ON sessions
+BEGIN
+    UPDATE sessions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+END;
+
+-- 会話ごとの送信の指定。行が無ければ、送信のモード(manual / auto)の既定に従う
+CREATE TABLE IF NOT EXISTS sync_sessions (
+    server_id  TEXT    NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    state      TEXT    NOT NULL CHECK (state IN ('send', 'excluded')),
+    visibility TEXT,
+    sent_at    TEXT,
+    PRIMARY KEY (server_id, session_id)
+);
+
+-- 発言ごとの送信済みの記録
+CREATE TABLE IF NOT EXISTS sync_events (
+    server_id TEXT    NOT NULL,
+    event_id  INTEGER NOT NULL REFERENCES events(id),
+    sent_at   TEXT    NOT NULL,
+    PRIMARY KEY (server_id, event_id)
+);
+
+-- 送信の途中状態。通信が切れたら、同じ batch_id と同じ本文で送り直す(サーバー側が冪等に受ける)
+CREATE TABLE IF NOT EXISTS sync_outbox (
+    server_id  TEXT NOT NULL,
+    batch_id   TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    event_ids  TEXT NOT NULL,
+    session_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (server_id, batch_id)
+);
+"#;
 
 pub fn default_db_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("SYNCLANE_DB") {
@@ -206,6 +253,16 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute(
             "INSERT INTO schema_versions(version) VALUES (?1)",
             params![3],
+        )?;
+        tx.commit()?;
+        current = 3;
+    }
+    if current < 4 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_4)?;
+        tx.execute(
+            "INSERT INTO schema_versions(version) VALUES (?1)",
+            params![4],
         )?;
         tx.commit()?;
     }
