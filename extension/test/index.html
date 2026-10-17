@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>OnlyFans サービス説明</title>
+<title>試験用の会話</title>
 <!--
   extract.js の試験。ブラウザで開くと、結果が下に出る（すべて OK なら先頭が「ALL OK」）。
     cd extension && python3 -m http.server 8765 --bind 127.0.0.1   →   http://127.0.0.1:8765/test/
@@ -70,7 +70,7 @@
         </div></div>
       <div><button aria-label="コピーする"></button></div></div>`;
   }
-  const CONV = "6a028271-e50c-8320-b519-0035cb794fcc";
+  const CONV = "00000000-0000-4000-8000-000000000001";
   const page = (active, conv, turns) => `<div data-app-shell-active-page="${active}">${turns.map((t) => chatgptTurn(conv, ...t)).join("")}</div>`;
   {
     const host = mount(
