@@ -46,13 +46,14 @@ pub struct SessionRow {
     pub title: Option<String>,
     pub started_at: Option<String>,
     pub events: i64,
-    /// 実際に送る対象か(モードと指定から決まる): send / excluded / not_selected
+    /// 実際に送る対象か(モード・ルール・指定から決まる): send / excluded / rule_excluded / not_selected
     pub state: &'static str,
     pub unsent_events: i64,
 }
 
 /// 会話の一覧(新しい順)と、それぞれを送るかどうか。
 pub fn list_sessions(conn: &Connection, server: &str, mode: Mode, limit: usize, offset: usize) -> Result<Vec<SessionRow>> {
+    let rules = store::rules(conn)?;
     let mut stmt = conn.prepare(
         "SELECT s.id, s.source_tool, s.project_path, s.title,
                 COALESCE(s.started_at, (SELECT MIN(occurred_at) FROM events WHERE session_id = s.id)) AS started,
@@ -65,21 +66,47 @@ pub fn list_sessions(conn: &Connection, server: &str, mode: Mode, limit: usize, 
     )?;
     let rows = stmt.query_map(rusqlite::params![server, limit as i64, offset as i64], |row| {
         let explicit: Option<String> = row.get(6)?;
+        let (tool, path, started): (String, String, Option<String>) = (row.get(1)?, row.get(2)?, row.get(4)?);
         let state = match (explicit.as_deref(), mode) {
-            (Some("send"), _) | (None, Mode::Auto) => "send",
+            (Some("send"), _) => "send",
+            (None, Mode::Auto) if rules.allows(&path, &tool, started.as_deref()) => "send",
+            (None, Mode::Auto) => "rule_excluded",
             (Some("excluded"), _) => "excluded",
             _ => "not_selected",
         };
         Ok(SessionRow {
             id: row.get(0)?,
-            source_tool: row.get(1)?,
-            project_path: row.get(2)?,
+            source_tool: tool,
+            project_path: path,
             title: row.get(3)?,
-            started_at: row.get(4)?,
+            started_at: started,
             events: row.get(5)?,
             state,
             unsent_events: row.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Debug, Serialize)]
+pub struct RuleOptions {
+    pub rules: store::Rules,
+    /// 手元にあるツール(ルールで選ぶ候補)と、その会話の数
+    pub tools: Vec<(String, i64)>,
+    /// 手元にあるプロジェクトと、その会話の数(多い順)
+    pub projects: Vec<(String, i64)>,
+}
+
+/// 除外のルールと、選ぶ候補(手元にあるツールとプロジェクト)。
+pub fn rule_options(conn: &Connection) -> Result<RuleOptions> {
+    let pairs = |sql: &str| -> Result<Vec<(String, i64)>> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    };
+    Ok(RuleOptions {
+        rules: store::rules(conn)?,
+        tools: pairs("SELECT source_tool, COUNT(*) FROM sessions GROUP BY source_tool ORDER BY COUNT(*) DESC")?,
+        projects: pairs("SELECT project_path, COUNT(*) FROM sessions WHERE project_path <> '' GROUP BY project_path ORDER BY COUNT(*) DESC, project_path")?,
+    })
 }

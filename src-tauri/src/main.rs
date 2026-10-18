@@ -84,7 +84,12 @@ fn close_search_window(app: tauri::AppHandle) -> Result<(), String> {
 fn run_mcp() -> ! {
     let result = db::default_db_path()
         .and_then(|path| db::open_readonly(&path))
-        .and_then(|conn| synclane::mcp::serve(&conn, std::io::stdin().lock(), std::io::stdout().lock()));
+        .and_then(|conn| {
+            // サーバーに接続していれば、team / all の検索も使える(していなければ、手元だけ)
+            let transport = synclane::sync::api::UreqTransport::new();
+            let remote = synclane::sync::remote::Remote::from_settings(&conn, &synclane::sync::secrets::KeyringStore, &transport);
+            synclane::mcp::serve_with(&conn, remote.as_ref(), std::io::stdin().lock(), std::io::stdout().lock())
+        });
     match result {
         Ok(()) => std::process::exit(0),
         Err(error) => {
@@ -243,7 +248,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             status, timeline, mcp_executable, open_search_window, close_search_window,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
-            sync_app::sync_select_all, sync_app::sync_connect, sync_app::sync_connect_cancel,
+            sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now
         ])
         .run(tauri::generate_context!())

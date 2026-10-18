@@ -116,13 +116,79 @@ pub fn clear_connection(conn: &Connection) -> Result<()> {
             conn.execute(&format!("DELETE FROM {table} WHERE server_id = ?1"), [&server])?;
         }
     }
-    for key in [K_SERVER, K_DEVICE, K_USER, K_MODE, "sync.last_result"] {
+    for key in [K_SERVER, K_DEVICE, K_USER, K_MODE, K_RULES, "sync.last_result"] {
         remove(conn, key)?;
     }
     for scope in ["ingest", "search"] {
         remove(conn, &token_key(scope))?;
     }
     Ok(())
+}
+
+// ---- 除外のルール ----
+
+/// 自動のモードで、送らない会話を決めるルール。会話ごとの指定(`sync_sessions.state`)は、これより優先する(例外の指定)。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rules {
+    /// 送らないプロジェクト(`project_path` の完全一致)
+    #[serde(default)]
+    pub exclude_projects: Vec<String>,
+    /// 送らないツール(`source_tool` の完全一致。例: gemini_web)
+    #[serde(default)]
+    pub exclude_tools: Vec<String>,
+    /// この日(YYYY-MM-DD)より前に始まった会話は送らない
+    #[serde(default)]
+    pub since: Option<String>,
+}
+
+const K_RULES: &str = "sync.rules";
+
+pub fn rules(conn: &Connection) -> Result<Rules> {
+    Ok(get(conn, K_RULES)?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+}
+
+pub fn set_rules(conn: &Connection, rules: &Rules) -> Result<()> {
+    if let Some(since) = rules.since.as_deref() {
+        let ok = since.len() == 10
+            && since.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() });
+        if !ok {
+            bail!("since は YYYY-MM-DD の形式で指定してください(指定: {since})");
+        }
+    }
+    set(conn, K_RULES, &serde_json::to_string(rules)?)
+}
+
+impl Rules {
+    /// ルールに照らして、この会話を送ってよいか(SQL の `rules_sql` と同じ判定)。
+    pub fn allows(&self, project_path: &str, source_tool: &str, started_at: Option<&str>) -> bool {
+        if self.exclude_projects.iter().any(|p| p == project_path) || self.exclude_tools.iter().any(|t| t == source_tool) {
+            return false;
+        }
+        match (self.since.as_deref(), started_at) {
+            (Some(since), Some(started)) => started >= since,
+            _ => true,
+        }
+    }
+
+    /// 会話の表 `s`(sessions)の列に対する、「ルールで送ってよい」条件の SQL。値は文字列として埋め込む(? の番号を増やさないため)。
+    pub fn sql(&self) -> String {
+        fn literal(value: &str) -> String {
+            format!("'{}'", value.replace('\'', "''"))
+        }
+        let mut parts = vec!["1".to_string()];
+        if !self.exclude_projects.is_empty() {
+            let list: Vec<_> = self.exclude_projects.iter().map(|v| literal(v)).collect();
+            parts.push(format!("s.project_path NOT IN ({})", list.join(",")));
+        }
+        if !self.exclude_tools.is_empty() {
+            let list: Vec<_> = self.exclude_tools.iter().map(|v| literal(v)).collect();
+            parts.push(format!("s.source_tool NOT IN ({})", list.join(",")));
+        }
+        if let Some(since) = &self.since {
+            parts.push(format!("(s.started_at IS NULL OR s.started_at >= {})", literal(since)));
+        }
+        format!("({})", parts.join(" AND "))
+    }
 }
 
 // ---- 会話ごとの指定 ----
@@ -158,8 +224,11 @@ pub fn include_all(conn: &Connection, server: &str, visibility: Option<&str>) ->
     )?)
 }
 
-/// 送る対象の会話の条件(SQL)。`ss` は sync_sessions の別名。?1 が server_id、?2 が auto かどうか(1/0)。
-pub const ELIGIBLE: &str = "(ss.state = 'send' OR (ss.state IS NULL AND ?2 = 1))";
+/// 送る対象の会話の条件(SQL)。`ss` は sync_sessions、`s` は sessions の別名。?1 が server_id、?2 が auto かどうか(1/0)。
+/// 会話ごとの指定(send)が先。指定がなく、auto のときは、除外のルールに合わない会話を送る。
+pub fn eligible(rules: &Rules) -> String {
+    format!("(ss.state = 'send' OR (ss.state IS NULL AND ?2 = 1 AND {}))", rules.sql())
+}
 
 pub struct PendingEvent {
     pub id: i64,
@@ -173,12 +242,14 @@ pub struct PendingEvent {
 
 /// まだ送っていない(または送ったあとで本文が変わった)発言。古い ID から。
 pub fn pending_events(conn: &Connection, server: &str, mode: Mode, limit: usize) -> Result<Vec<PendingEvent>> {
+    let eligible = eligible(&rules(conn)?);
     let sql = format!(
         "SELECT e.id, e.session_id, e.source_tool, e.source_event_id, e.occurred_at, e.role, e.content
          FROM events e
+         JOIN sessions s ON s.id = e.session_id
          LEFT JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = e.session_id
          LEFT JOIN sync_events se ON se.server_id = ?1 AND se.event_id = e.id
-         WHERE {ELIGIBLE} AND (se.event_id IS NULL OR e.updated_at > se.sent_at)
+         WHERE {eligible} AND (se.event_id IS NULL OR e.updated_at > se.sent_at)
          ORDER BY e.id LIMIT ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -198,10 +269,11 @@ pub fn pending_events(conn: &Connection, server: &str, mode: Mode, limit: usize)
 
 /// 送ったあとで、題名などが変わった会話(発言は送らず、会話の情報だけを送り直す)。
 pub fn sessions_needing_meta(conn: &Connection, server: &str, mode: Mode) -> Result<Vec<i64>> {
+    let eligible = eligible(&rules(conn)?);
     let sql = format!(
         "SELECT s.id FROM sessions s
          JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = s.id
-         WHERE {ELIGIBLE} AND ss.sent_at IS NOT NULL AND s.updated_at > ss.sent_at
+         WHERE {eligible} AND ss.sent_at IS NOT NULL AND s.updated_at > ss.sent_at
          ORDER BY s.id LIMIT 200"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -221,18 +293,20 @@ pub struct Counts {
 
 pub fn counts(conn: &Connection, server: &str, mode: Mode) -> Result<Counts> {
     let auto = (mode == Mode::Auto) as i64;
+    let eligible = eligible(&rules(conn)?);
     let sessions_total: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
     let excluded: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sync_sessions WHERE server_id = ?1 AND state = 'excluded'", [server], |r| r.get(0))?;
     let selected: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM sessions s LEFT JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = s.id WHERE {ELIGIBLE}"),
+        &format!("SELECT COUNT(*) FROM sessions s LEFT JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = s.id WHERE {eligible}"),
         params![server, auto], |r| r.get(0))?;
     let pending: i64 = conn.query_row(
         &format!(
             "SELECT COUNT(*) FROM events e
+             JOIN sessions s ON s.id = e.session_id
              LEFT JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = e.session_id
              LEFT JOIN sync_events se ON se.server_id = ?1 AND se.event_id = e.id
-             WHERE {ELIGIBLE} AND (se.event_id IS NULL OR e.updated_at > se.sent_at)"),
+             WHERE {eligible} AND (se.event_id IS NULL OR e.updated_at > se.sent_at)"),
         params![server, auto], |r| r.get(0))?;
     let (sent, last): (i64, Option<String>) = conn.query_row(
         "SELECT COUNT(*), MAX(sent_at) FROM sync_events WHERE server_id = ?1", [server], |r| Ok((r.get(0)?, r.get(1)?)))?;

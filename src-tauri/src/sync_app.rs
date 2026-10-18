@@ -145,6 +145,18 @@ pub fn sync_set_mode(mode: String, app: State<'_, AppState>) -> Result<(), Strin
     store::set_mode(&conn, Mode::parse(&mode).map_err(message)?).map_err(message)
 }
 
+#[tauri::command]
+pub fn sync_rules(app: State<'_, AppState>) -> Result<ops::RuleOptions, String> {
+    let conn = app.0.lock().map_err(message)?;
+    ops::rule_options(&conn).map_err(message)
+}
+
+#[tauri::command]
+pub fn sync_set_rules(rules: store::Rules, app: State<'_, AppState>) -> Result<(), String> {
+    let conn = app.0.lock().map_err(message)?;
+    store::set_rules(&conn, &rules).map_err(message)
+}
+
 /// 会話の指定を変える。state は "send" / "excluded" / null(指定を外す)。
 #[tauri::command]
 pub fn sync_select(ids: Vec<i64>, state: Option<String>, visibility: Option<String>, app: State<'_, AppState>) -> Result<(), String> {

@@ -9,11 +9,13 @@
 //! - `api`         HTTP(JSON)の薄い層。テストでは差し替える
 //! - `device_flow` 端末の登録(ブラウザで承認する方式)
 //! - `engine`      送信の本体(まとめて送る・再送・トークンの更新)
+//! - `remote`      サーバーの検索 API を呼ぶ(MCP の `team` / `all`)
 
 pub mod api;
 pub mod device_flow;
 pub mod engine;
 pub mod ops;
+pub mod remote;
 pub mod secrets;
 pub mod store;
 

@@ -190,5 +190,9 @@ fn save_tokens(conn: &Connection, store: &dyn TokenStore, server: &str, body: &V
         user_email: body["user"]["email"].as_str().unwrap_or("").to_string(),
     };
     save_connection(conn, &connection)?;
+    // 接続したら、既定は「除外した以外の全部」。接続すること自体が、送ることへの同意(絞るなら、除外のルールで)
+    if super::store::get(conn, "sync.mode")?.is_none() {
+        super::store::set_mode(conn, super::store::Mode::Auto)?;
+    }
     Ok(connection)
 }

@@ -3,7 +3,7 @@
 (() => {
   Object.assign(I18N.ja, {
     navServer: 'サーバー',
-    srvIntro: '会社などが用意した SyncLane サーバーに、選んだ会話を送ります。接続しなければ、何も送りません。接続しても、初期状態では何も送りません。',
+    srvIntro: '会社などが用意した SyncLane サーバーに、会話を送ります。接続しなければ、何も送りません。接続すると、除外したもの以外を、すべて送ります。',
     srvUrl: 'サーバーのアドレス',
     srvUrlPlaceholder: 'https://sync.example.com',
     srvConnect: '接続する',
@@ -15,24 +15,27 @@
     srvConnected: (server, user) => `${server} に接続中（${user}）`,
     srvMode: '送る会話',
     srvModeManual: '選んだ会話だけ',
-    srvModeManualNote: '下の一覧で、送る会話にチェックを入れます。',
-    srvModeAuto: '除外した会話以外の全部',
-    srvModeAutoNote: 'これから取り込む会話も、自動で送ります。送りたくない会話は、チェックを外します。',
+    srvModeManualNote: '「会話を個別に指定する」で、送る会話にチェックを入れます。',
+    srvModeAuto: 'すべて（除外したものを除く）',
+    srvModeAutoNote: 'これから取り込む会話も、自動で送ります。送らないものは、下で指定します。',
+    srvRules: '送らないもの',
+    srvSince: 'この日より前に始めた会話は送らない',
+    srvTools: 'ツール（チェックを外すと送らない）',
+    srvProjects: 'プロジェクト（チェックを外すと送らない）',
+    srvListDetail: '会話を個別に指定する',
+    srvListNote: 'ルールの例外です。ルールで除外された会話も、チェックを入れれば送ります。',
+    srvStateRule: 'ルールで除外',
     srvStatus: (sent, pending) => `送り済み ${sent} 件、待ち ${pending} 件`,
     srvLast: (at) => `最後に送った時刻: ${at}`,
     srvNever: 'まだ送っていません',
     srvRunning: '送信中…',
     srvSendNow: '今すぐ送る',
+    srvAutoNote: '新しい会話は、1 分おきに自動で送ります。ボタンは、待たずに送りたいときだけ押します。',
     srvDisconnect: '接続を解除',
     srvDisconnectConfirm: '接続を解除します。送り済みの会話は、サーバーに残ります。よければ、もう一度押してください。',
     srvDisconnectYes: '解除する',
     srvBlocked: (m) => `送信を止めています: ${m}`,
     srvBlockedHint: '解決するには、接続を解除して、もう一度つないでください。',
-    srvVisibility: '新しく送る会話の公開範囲',
-    srvVisDefault: 'サーバーの既定',
-    srvVisPrivate: '自分だけ',
-    srvVisOrg: 'サーバーの全員',
-    srvList: '会話の一覧',
     srvSelectAll: 'すべて送る対象にする',
     srvMore: 'さらに表示',
     srvStateSend: '送る',
@@ -40,14 +43,14 @@
     srvStateNone: '未選択',
     srvUnsent: (n) => `未送信 ${n}`,
     srvEvents: (n) => `${n}件`,
-    srvWarn: '送るのは、会話の本文（あなたの発言と AI の応答）、題名、プロジェクトのパス、時刻です。パスワードやキーが会話に含まれていないか、確認してから選んでください。',
+    srvWarn: '送るのは、会話の本文（あなたの発言と AI の応答）、題名、プロジェクトのパス、時刻です。公開範囲は、サーバーの設定で決まります。',
     srvConnectFailed: (m) => `接続できませんでした: ${m}`,
     srvError: (m) => `エラー: ${m}`,
     srvEmpty: '会話がまだありません。',
   });
   Object.assign(I18N.en, {
     navServer: 'Server',
-    srvIntro: 'Send the conversations you choose to a SyncLane server (for example one your company runs). If you do not connect, nothing is sent. Even after connecting, nothing is sent at first.',
+    srvIntro: 'Sends your conversations to a SyncLane server set up by your company. Nothing is sent unless you connect. Once connected, everything is sent except what you exclude.',
     srvUrl: 'Server address',
     srvUrlPlaceholder: 'https://sync.example.com',
     srvConnect: 'Connect',
@@ -59,24 +62,27 @@
     srvConnected: (server, user) => `Connected to ${server} (${user})`,
     srvMode: 'What to send',
     srvModeManual: 'Only the conversations I pick',
-    srvModeManualNote: 'Tick the conversations to send in the list below.',
-    srvModeAuto: 'Everything except what I exclude',
-    srvModeAutoNote: 'Conversations imported from now on are also sent automatically. Untick the ones you do not want to send.',
+    srvModeManualNote: 'Tick the conversations to send under “Pick conversations one by one”.',
+    srvModeAuto: 'Everything (except what I exclude)',
+    srvModeAutoNote: 'Conversations imported from now on are also sent automatically. Choose what not to send below.',
+    srvRules: 'What not to send',
+    srvSince: 'Do not send conversations that started before',
+    srvTools: 'Tools (untick to skip)',
+    srvProjects: 'Projects (untick to skip)',
+    srvListDetail: 'Pick conversations one by one',
+    srvListNote: 'These are exceptions to the rules. A conversation excluded by a rule is sent if you tick it.',
+    srvStateRule: 'Excluded by rule',
     srvStatus: (sent, pending) => `${sent} sent, ${pending} waiting`,
     srvLast: (at) => `Last sent: ${at}`,
     srvNever: 'Nothing sent yet',
     srvRunning: 'Sending…',
     srvSendNow: 'Send now',
+    srvAutoNote: 'New conversations are sent automatically every minute. Press the button only if you do not want to wait.',
     srvDisconnect: 'Disconnect',
     srvDisconnectConfirm: 'Conversations already sent stay on the server. Press again to disconnect.',
     srvDisconnectYes: 'Disconnect now',
     srvBlocked: (m) => `Sending is paused: ${m}`,
     srvBlockedHint: 'To fix it, disconnect and connect again.',
-    srvVisibility: 'Visibility of conversations sent from now on',
-    srvVisDefault: 'Server default',
-    srvVisPrivate: 'Only me',
-    srvVisOrg: 'Everyone on the server',
-    srvList: 'Conversations',
     srvSelectAll: 'Select all to send',
     srvMore: 'Show more',
     srvStateSend: 'Send',
@@ -84,7 +90,7 @@
     srvStateNone: 'Not selected',
     srvUnsent: (n) => `${n} unsent`,
     srvEvents: (n) => `${n}`,
-    srvWarn: 'What is sent: the text of the conversation (your messages and the AI replies), the title, the project path and the times. Check that no passwords or keys are in them before you pick.',
+    srvWarn: 'What is sent: the text of the conversation (your messages and the AI replies), the title, the project path and the times. Who can see them is set on the server.',
     srvConnectFailed: (m) => `Could not connect: ${m}`,
     srvError: (m) => `Error: ${m}`,
     srvEmpty: 'No conversations yet.',
@@ -94,7 +100,8 @@
   const root = $('sync-root');
   let overview = null;
   let rows = [];
-  let visibility = '';
+  let ruleOpts = null;
+  let listOpen = false;
   let message = '';
   let urlDraft = '';
   let busy = false;
@@ -129,6 +136,7 @@
     try {
       overview = await invoke('sync_overview');
       if (overview.connection && reloadRows) {
+        ruleOpts = await invoke('sync_rules');
         rows = await invoke('sync_sessions', { limit: Math.max(PAGE, rows.length), offset: 0 });
       } else if (!overview.connection) {
         rows = [];
@@ -145,7 +153,15 @@
     if (connecting) {
       children.push(
         el('div', { class: 'opt-title' }, t('srvCodeTitle')),
-        el('p', { class: 'sync-code' }, connecting.user_code),
+        el('div', { class: 'sync-code-row' },
+          el('p', { class: 'sync-code' }, connecting.user_code),
+          el('button', { type: 'button', onclick: async (e) => {
+            const button = e.currentTarget;
+            try { await navigator.clipboard.writeText(connecting.user_code); } catch (_) { return; }
+            button.textContent = t('mcpCopied');
+            setTimeout(() => { button.textContent = t('mcpCopy'); }, 1500);
+          } }, t('mcpCopy')),
+        ),
         note(t('srvCodeOpened')),
         el('textarea', { class: 'code', readonly: true, rows: '2', onclick: (e) => e.target.select() }, connecting.url),
         note(t('srvWaiting')),
@@ -174,7 +190,7 @@
   }
 
   function stateLabel(state) {
-    return state === 'send' ? t('srvStateSend') : state === 'excluded' ? t('srvStateExcluded') : t('srvStateNone');
+    return state === 'send' ? t('srvStateSend') : state === 'excluded' ? t('srvStateExcluded') : state === 'rule_excluded' ? t('srvStateRule') : t('srvStateNone');
   }
 
   function renderSessions() {
@@ -186,7 +202,7 @@
       box.addEventListener('change', async () => {
         // 外したとき: 自動のモードでは「除外」、手動のモードでは「指定なし」
         const state = box.checked ? 'send' : (auto ? 'excluded' : null);
-        await call('sync_select', { ids: [row.id], state, visibility: box.checked && visibility ? visibility : null });
+        await call('sync_select', { ids: [row.id], state, visibility: null });
         refresh();
       });
       const name = row.title || row.project_path || `#${row.id}`;
@@ -209,6 +225,34 @@
     return el('label', { class: 'sync-radio' }, input, el('span', {}, el('strong', {}, label), el('span', { class: 'sync-radio-note' }, noteText)));
   }
 
+  async function saveRules(rules) {
+    await call('sync_set_rules', { rules });
+    refresh();
+  }
+
+  // 自動のモードで、送らないものをルールで決める(会話を 1 件ずつ選ばなくてよいように)
+  function renderRules() {
+    const rules = { exclude_projects: [], exclude_tools: [], since: null, ...(ruleOpts?.rules || {}) };
+    const toggle = (list, value, on) => (on ? list.filter((v) => v !== value) : [...list, value]);
+    const checks = (items, key) => el('div', { class: 'sync-list sync-rules-list' }, ...items.map(([value, count]) => {
+      const box = el('input', { type: 'checkbox', checked: !rules[key].includes(value) });
+      box.addEventListener('change', () => saveRules({ ...rules, [key]: toggle(rules[key], value, box.checked) }));
+      return el('label', { class: 'sync-row send' },
+        box,
+        el('span', { class: 'sync-name', title: value }, value),
+        el('span', { class: 'sync-state' }, t('srvEvents', count)),
+      );
+    }));
+    const since = el('input', { type: 'date', value: rules.since || '' });
+    since.addEventListener('change', () => saveRules({ ...rules, since: since.value || null }));
+    return el('div', { class: 'sync-rules' },
+      el('div', { class: 'opt-title' }, t('srvRules')),
+      el('div', { class: 'opt-row' }, el('label', {}, t('srvSince')), since),
+      ruleOpts?.tools?.length ? [el('div', { class: 'opt-title' }, t('srvTools')), checks(ruleOpts.tools, 'exclude_tools')] : null,
+      ruleOpts?.projects?.length ? [el('div', { class: 'opt-title' }, t('srvProjects')), checks(ruleOpts.projects, 'exclude_projects')] : null,
+    );
+  }
+
   function renderConnected() {
     const c = overview.connection;
     const counts = overview.counts || {};
@@ -218,8 +262,8 @@
       el('p', { class: 'sync-connected' }, t('srvConnected', c.server, user)),
       el('div', { class: 'opt-title' }, t('srvMode')),
       el('div', { class: 'sync-radios' },
-        radio('sync-mode', 'manual', overview.mode === 'manual', t('srvModeManual'), t('srvModeManualNote'), async () => { await call('sync_set_mode', { mode: 'manual' }); refresh(); }),
         radio('sync-mode', 'auto', overview.mode === 'auto', t('srvModeAuto'), t('srvModeAutoNote'), async () => { await call('sync_set_mode', { mode: 'auto' }); refresh(); }),
+        radio('sync-mode', 'manual', overview.mode === 'manual', t('srvModeManual'), t('srvModeManualNote'), async () => { await call('sync_set_mode', { mode: 'manual' }); refresh(); }),
       ),
       note(`${t('srvStatus', counts.events_sent || 0, counts.events_pending || 0)} · ${t('srvLast', last)}`),
     ];
@@ -244,21 +288,20 @@
       }
       await call('sync_disconnect'); message = ''; refresh();
     });
-    children.push(el('div', { class: 'opt-row' }, sendNow, disconnect), disconnectNote);
+    children.push(el('div', { class: 'opt-row' }, sendNow, disconnect), note(t('srvAutoNote')), disconnectNote);
 
-    const vis = el('select', { id: 'sync-visibility' },
-      el('option', { value: '' }, t('srvVisDefault')),
-      el('option', { value: 'private' }, t('srvVisPrivate')),
-      el('option', { value: 'org' }, t('srvVisOrg')));
-    vis.value = visibility;
-    vis.addEventListener('change', () => { visibility = vis.value; });
     const selectAll = el('button', { type: 'button' }, t('srvSelectAll'));
-    selectAll.addEventListener('click', async () => { await call('sync_select_all', { visibility: visibility || null }); refresh(); });
-    children.push(
-      el('div', { class: 'opt-title' }, t('srvList')),
-      el('div', { class: 'opt-row' }, el('label', { for: 'sync-visibility' }, t('srvVisibility')), vis),
+    selectAll.addEventListener('click', async () => { await call('sync_select_all', { visibility: null }); refresh(); });
+    const details = el('details', { class: 'sync-details', open: listOpen },
+      el('summary', {}, t('srvListDetail')),
+      note(t('srvListNote')),
       overview.mode === 'manual' ? el('div', { class: 'opt-row' }, selectAll) : null,
-      renderSessions(),
+      ...renderSessions(),
+    );
+    details.addEventListener('toggle', () => { listOpen = details.open; });
+    children.push(
+      overview.mode === 'auto' ? renderRules() : null,
+      details,
       note(t('srvWarn'), 'warn'),
     );
     return children;

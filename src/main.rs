@@ -154,7 +154,10 @@ fn run() -> Result<()> {
     if matches!(cli.command, Command::Mcp) {
         // 標準出力は JSON-RPC 専用。読み取り専用で開き、マイグレーションはしない
         let conn = db::open_readonly(&path)?;
-        return synclane::mcp::serve(&conn, std::io::stdin().lock(), std::io::stdout().lock());
+        // サーバーに接続していれば、team / all の検索も使える(していなければ、手元だけ)
+        let transport = synclane::sync::api::UreqTransport::new();
+        let remote = synclane::sync::remote::Remote::from_settings(&conn, &synclane::sync::secrets::KeyringStore, &transport);
+        return synclane::mcp::serve_with(&conn, remote.as_ref(), std::io::stdin().lock(), std::io::stdout().lock());
     }
     let mut conn = db::open(&path)?;
 
@@ -265,7 +268,7 @@ fn server_command(conn: &rusqlite::Connection, action: ServerAction) -> Result<(
             println!("承認を待っています…(Ctrl+C で中止)");
             let connection = device_flow::finish(conn, &transport, &secrets, &pending, &std::thread::sleep, &|| false)?;
             println!("接続しました: {} ({} / {})", connection.server, connection.user_name, connection.user_email);
-            println!("今は何も送りません。送る会話を選ぶか(`synclane sync include …`)、`synclane sync mode auto` にしてください。");
+            println!("除外した会話以外を、すべて送ります。絞るときは `synclane sync mode manual` にして、`synclane sync include …` で選んでください。");
         }
         ServerAction::Status => {
             let overview = ops::overview(conn)?;

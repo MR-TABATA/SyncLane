@@ -186,7 +186,7 @@ pub fn open_readonly(path: &Path) -> Result<Connection> {
 /// ログの並び順の番号(sequence)は増分の収集で重なるため、時刻と ID で並べる。
 pub fn session_events(conn: &Connection, session_id: i64, around: Option<i64>, window: usize) -> Result<Vec<TimelineEvent>> {
     let mut stmt = conn.prepare(
-        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
          FROM events e JOIN sessions s ON s.id = e.session_id
          WHERE e.session_id = ?1 ORDER BY e.occurred_at ASC, e.id ASC",
     )?;
@@ -294,6 +294,8 @@ pub struct TimelineEvent {
     pub event_id: i64,
     pub role: String,
     pub content: String,
+    /// 元のツールでの発言の ID(サーバーの結果と突き合わせて、重複を省くための鍵。`source_tool` と組)
+    pub source_event_id: String,
 }
 
 pub fn timeline(
@@ -323,7 +325,7 @@ pub fn timeline_range(
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
     let mut sql = String::from(
-        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
          FROM events e
          JOIN sessions s ON s.id = e.session_id",
     );
@@ -376,6 +378,7 @@ fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEv
         content: row.get(5)?,
         title: row.get(6)?,
         event_id: row.get(7)?,
+        source_event_id: row.get(8)?,
     })
 }
 

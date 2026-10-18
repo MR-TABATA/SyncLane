@@ -704,3 +704,91 @@ fn time_helpers_agree_with_sqlite() {
     assert_eq!(from_sqlite.len(), ours.len());
     assert!(super::parse_time("2027-01-15T04:12:33.123456+00:00").is_some());
 }
+
+// ---- 除外のルール ----
+
+fn set_session(conn: &Connection, id: i64, project: &str, started: Option<&str>) {
+    conn.execute("UPDATE sessions SET project_path = ?2, started_at = ?3 WHERE id = ?1", rusqlite::params![id, project, started]).unwrap();
+}
+
+fn sent(env: &Env, tool: &str, event: &str) -> bool {
+    env.server.events.borrow().contains_key(&(tool.to_string(), event.to_string()))
+}
+
+#[test]
+fn rules_exclude_by_project_tool_and_date_in_auto_mode() {
+    let env = env();
+    let keep = add_session(&env.conn, "claude-code", "k", &[("k1", "送る")]);
+    let personal = add_session(&env.conn, "claude-code", "p", &[("p1", "個人")]);
+    let web = add_session(&env.conn, "gemini_web", "w", &[("w1", "Web")]);
+    let old = add_session(&env.conn, "claude-code", "o", &[("o1", "古い")]);
+    set_session(&env.conn, keep, "/work/app", Some("2026-10-10T00:00:00.000Z"));
+    set_session(&env.conn, personal, "/home/me/private", Some("2026-10-10T00:00:00.000Z"));
+    set_session(&env.conn, web, "", Some("2026-10-10T00:00:00.000Z"));
+    set_session(&env.conn, old, "/work/app", Some("2026-09-01T00:00:00.000Z"));
+    store::set_mode(&env.conn, Mode::Auto).unwrap();
+    store::set_rules(&env.conn, &store::Rules {
+        exclude_projects: vec!["/home/me/private".into()],
+        exclude_tools: vec!["gemini_web".into()],
+        since: Some("2026-10-01".into()),
+    }).unwrap();
+
+    assert_eq!(store::counts(&env.conn, SERVER, Mode::Auto).unwrap().events_pending, 1);
+    run(&env);
+    assert!(sent(&env, "claude-code", "k1"));
+    assert!(!sent(&env, "claude-code", "p1") && !sent(&env, "gemini_web", "w1") && !sent(&env, "claude-code", "o1"));
+}
+
+#[test]
+fn explicit_send_beats_rules_and_explicit_exclusion_beats_no_rule() {
+    let env = env();
+    let forced = add_session(&env.conn, "gemini_web", "f", &[("f1", "例外で送る")]);
+    let dropped = add_session(&env.conn, "claude-code", "d", &[("d1", "個別に除外")]);
+    store::set_mode(&env.conn, Mode::Auto).unwrap();
+    store::set_rules(&env.conn, &store::Rules { exclude_tools: vec!["gemini_web".into()], ..Default::default() }).unwrap();
+    include(&env, forced);
+    store::set_session_state(&env.conn, SERVER, dropped, Some("excluded"), None).unwrap();
+    run(&env);
+    assert!(sent(&env, "gemini_web", "f1"));
+    assert!(!sent(&env, "claude-code", "d1"));
+}
+
+#[test]
+fn rules_do_not_apply_in_manual_mode_and_list_shows_rule_excluded() {
+    let env = env();
+    let id = add_session(&env.conn, "gemini_web", "w", &[("w1", "x")]);
+    store::set_rules(&env.conn, &store::Rules { exclude_tools: vec!["gemini_web".into()], ..Default::default() }).unwrap();
+    let state = |mode| super::ops::list_sessions(&env.conn, SERVER, mode, 10, 0).unwrap().into_iter().find(|r| r.id == id).unwrap().state;
+    assert_eq!(state(Mode::Manual), "not_selected");
+    assert_eq!(state(Mode::Auto), "rule_excluded");
+    include(&env, id);
+    assert_eq!(state(Mode::Auto), "send");
+}
+
+#[test]
+fn rules_quote_odd_project_names_and_validate_the_date() {
+    let env = env();
+    let id = add_session(&env.conn, "claude-code", "q", &[("q1", "x")]);
+    set_session(&env.conn, id, "/work/it's \"mine\"", None);
+    store::set_mode(&env.conn, Mode::Auto).unwrap();
+    store::set_rules(&env.conn, &store::Rules { exclude_projects: vec!["/work/it's \"mine\"".into()], ..Default::default() }).unwrap();
+    assert_eq!(store::counts(&env.conn, SERVER, Mode::Auto).unwrap().events_pending, 0);
+    assert!(store::set_rules(&env.conn, &store::Rules { since: Some("10/01".into()), ..Default::default() }).is_err());
+    assert!(store::set_rules(&env.conn, &store::Rules { since: Some("2026-10-01'; --".into()), ..Default::default() }).is_err());
+}
+
+#[test]
+fn connecting_defaults_to_auto_but_keeps_an_earlier_choice() {
+    let connect = |conn: &Connection| {
+        let t = Routes::new(vec![("/auth/device/token", vec![token_reply()])]);
+        device_flow::finish(conn, &t, &MemoryStore::default(), &pending(), &no_sleep, &|| false).unwrap();
+    };
+    let conn = db::open_memory().unwrap();
+    connect(&conn);
+    assert_eq!(store::mode(&conn).unwrap(), Mode::Auto);
+
+    let conn = db::open_memory().unwrap();
+    store::set_mode(&conn, Mode::Manual).unwrap();
+    connect(&conn);
+    assert_eq!(store::mode(&conn).unwrap(), Mode::Manual);
+}
