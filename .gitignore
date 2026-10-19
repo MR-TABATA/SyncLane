@@ -6,3 +6,6 @@ target/
 *.db-shm
 *.db-wal
 src-tauri/target/
+
+# ストア・告知用に撮った画像(実機の画面。会話は撮影用の合成データ)
+/images_movies/

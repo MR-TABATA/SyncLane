@@ -1,0 +1,6 @@
+{
+  "extName": { "message": "SyncLane for AI chats" },
+  "extDescription": { "message": "Gemini と ChatGPT(Web 版)の会話を、この Mac の SyncLane アプリにだけ送ります。外部のサーバーには送りません。" },
+  "badgeBrokenTitle": { "message": "SyncLane: この画面から会話を読み取れません（画面の作りが変わった可能性。extension/README.md）" },
+  "badgeOfflineTitle": { "message": "SyncLane: アプリが起動していません（起動すると、送り直します）" }
+}

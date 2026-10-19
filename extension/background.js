@@ -3,8 +3,8 @@
 const ENDPOINT = "http://127.0.0.1:47821/ingest";
 
 const BADGES = {
-  broken: { text: "!", color: "#d97706", title: "SyncLane: この画面から会話を読み取れません（画面の作りが変わった可能性。extension/README.md）" },
-  offline: { text: "×", color: "#6b7280", title: "SyncLane: アプリが起動していません（起動すると、送り直します）" },
+  broken: { text: "!", color: "#d97706", title: chrome.i18n.getMessage("badgeBrokenTitle") },
+  offline: { text: "×", color: "#6b7280", title: chrome.i18n.getMessage("badgeOfflineTitle") },
 };
 
 function badge(tabId, key) {
@@ -12,7 +12,7 @@ function badge(tabId, key) {
   const b = BADGES[key];
   chrome.action.setBadgeText({ tabId, text: b ? b.text : "" });
   if (b) chrome.action.setBadgeBackgroundColor({ tabId, color: b.color });
-  chrome.action.setTitle({ tabId, title: b ? b.title : "SyncLane for AI chats" });
+  chrome.action.setTitle({ tabId, title: b ? b.title : chrome.i18n.getMessage("extName") });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
