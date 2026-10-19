@@ -193,11 +193,7 @@ fn run() -> Result<()> {
         Command::Sync { action, dry_run } => sync_command(&conn, action, dry_run)?,
         Command::Import { source } => match source {
             ImportSource::Claude { root, date, all } => {
-            let root = root.unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                    .join(".claude")
-                    .join("projects")
-            });
+            let root = root.unwrap_or_else(synclane::paths::claude_projects_dir);
             // --all is explicit documentation; omitting both flags keeps the original
             // behavior and also imports all events.
             let date_filter = if all { None } else { date.as_deref() };
@@ -210,11 +206,7 @@ fn run() -> Result<()> {
             println!("skipped lines: {}", report.skipped_lines);
             }
             ImportSource::Gemini { root, date, all } => {
-                let root = root.unwrap_or_else(|| {
-                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                        .join(".gemini")
-                        .join("tmp")
-                });
+                let root = root.unwrap_or_else(synclane::paths::gemini_tmp_dir);
                 let date_filter = if all { None } else { date.as_deref() };
                 let report = importer::import_gemini(&root, date_filter, &mut conn)?;
                 println!("root: {}", root.display());
@@ -225,11 +217,7 @@ fn run() -> Result<()> {
                 println!("skipped lines: {}", report.skipped_lines);
             }
             ImportSource::Codex { root, date, all } => {
-                let root = root.unwrap_or_else(|| {
-                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                        .join(".codex")
-                        .join("sessions")
-                });
+                let root = root.unwrap_or_else(synclane::paths::codex_sessions_dir);
                 let date_filter = if all { None } else { date.as_deref() };
                 let report = importer::import_codex(&root, date_filter, &mut conn)?;
                 println!("root: {}", root.display());

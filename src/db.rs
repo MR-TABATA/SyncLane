@@ -146,12 +146,8 @@ pub fn default_db_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("SYNCLANE_DB") {
         return Ok(PathBuf::from(path));
     }
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("SyncLane")
-        .join("synclane.db"))
+    let dir = crate::paths::app_data_dir().context("the home folder is not set (HOME, or USERPROFILE on Windows)")?;
+    Ok(dir.join("synclane.db"))
 }
 
 pub fn open(path: &Path) -> Result<Connection> {

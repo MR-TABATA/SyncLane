@@ -233,15 +233,14 @@ fn main() {
             });
             let handle = app.handle().clone();
             thread::spawn(move || {
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-                let root = home.join(".claude").join("projects");
+                let root = synclane::paths::claude_projects_dir();
                 // 題名の対応より前に取り込んだ会話に、題名を入れる(起動のたびに1回。入っているものは飛ばす)
                 if let Ok(mut conn) = collector_conn.lock() {
                     if let Err(error) = importer::backfill_claude_titles(&root, &mut conn) {
                         eprintln!("synclane title backfill: {error:#}");
                     }
                 }
-                let codex_root = home.join(".codex").join("sessions");
+                let codex_root = synclane::paths::codex_sessions_dir();
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {
