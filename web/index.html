@@ -639,11 +639,7 @@
     }
     $('toggle-search').addEventListener('click', () => { if (!isSearchWindow) openSearchWindow(); });
     document.addEventListener('keydown', (event) => {
-      if (!isSearchWindow && event.metaKey && !event.shiftKey && !event.altKey && event.key === ',') {
-        event.preventDefault();
-        $('settings-overlay').hidden = !$('settings-overlay').hidden;
-        if (!$('settings-overlay').hidden) fillMcpCommand();
-      } else if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
+      if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
         event.preventDefault();
         openSearchWindow();
       } else if (event.key === 'Escape') {
@@ -690,6 +686,11 @@
     }
     $('reload-btn').addEventListener('click', () => { showNew(false); load().catch(() => {}); });
     if (!isSearchWindow) window.__TAURI__?.event?.listen('events-updated', () => showNew(true));
+    // ⌘, はアプリのメニュー(設定…)が受けて、ここへ知らせる
+    if (!isSearchWindow) window.__TAURI__?.event?.listen('open-settings', () => {
+      $('settings-overlay').hidden = !$('settings-overlay').hidden;
+      if (!$('settings-overlay').hidden) fillMcpCommand();
+    });
     $('previous').addEventListener('click', () => moveSearch(-1));
     $('next').addEventListener('click', () => moveSearch(1));
     $('filter-apply').addEventListener('click', () => { searchActive = false; load().catch(() => {}); });

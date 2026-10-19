@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub struct AppState(pub Arc<Mutex<Connection>>);
@@ -105,6 +105,9 @@ fn mcp_executable() -> Result<String, String> {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
 }
 
+/// メニューの「設定…」(⌘,)。選ぶと、画面に `open-settings` を知らせる。
+const OPEN_SETTINGS: &str = "open-settings";
+
 /// 画面上部のメニューバー。既定のメニューは英語固定なので、システムの言語に合わせて自前で組む。
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let ja = sys_locale::get_locale().map(|l| l.to_lowercase().starts_with("ja")).unwrap_or(false);
@@ -115,6 +118,9 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[
             &PredefinedMenuItem::about(app, t("SyncLane について", "About SyncLane"), None)?,
+            &PredefinedMenuItem::separator(app)?,
+            // ⌘, は、メニューの項目として持つ(画面の中でキーを拾う方式は、画面が入力の受け手でないと届かない)
+            &MenuItem::with_id(app, OPEN_SETTINGS, if ja { "設定…" } else { "Settings…" }, true, Some("CmdOrCtrl+,"))?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, t("サービス", "Services"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -204,6 +210,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .on_menu_event(|app, event| {
+            if event.id() == OPEN_SETTINGS {
+                let _ = app.emit(OPEN_SETTINGS, ());
+            }
+        })
         .manage(AppState(shared_conn))
         .manage(sync_state.clone())
         .setup(move |app| {
