@@ -44,11 +44,14 @@ impl Allow {
 /// 必ず伏せる語(ユーザーが決める)。社内だけの名前(ホスト名・顧客名・案件のコード名など)は、既定のルールでは分からない。
 ///
 /// データベースの隣の `mask-block.txt` に、1 行に 1 つ書く(空の行と、`#` で始まる行は無視)。
-/// 普通の行は、その文字列そのもの(大文字小文字を区別する)。`re:` で始まる行は、正規表現。
+/// 普通の行は、その文字列そのもの(大文字小文字を区別する)。`=` か `:` で終わる行は、続く値も伏せる(`名前=` の形)。
+/// `re:` で始まる行は、正規表現。
 /// 壊れた正規表現の行は無視して、数だけ数える。許可リストと同じ値があるときは、こちらが勝つ。
 #[derive(Debug, Default, Clone)]
 pub struct Block {
     literals: Vec<String>,
+    /// `名前=`・`名前:` のように、`=` か `:` で終わる行。名前のあとに続く値(第 3 グループ)を伏せる
+    prefixes: Vec<Regex>,
     patterns: Vec<Regex>,
     /// 正規表現として読めず、無視した行の数
     pub ignored: usize,
@@ -65,6 +68,13 @@ impl Block {
                     Ok(re) => block.patterns.push(re),
                     Err(_) => block.ignored += 1,
                 },
+                None if line.ends_with('=') || line.ends_with(':') => {
+                    let pattern = format!(r#"({})(\s*["']?)([^\s"',;)}}\]]+)"#, regex::escape(line));
+                    match Regex::new(&pattern) {
+                        Ok(re) => block.prefixes.push(re),
+                        Err(_) => block.ignored += 1,
+                    }
+                }
                 None => block.literals.push(line.to_string()),
             }
         }
@@ -142,10 +152,30 @@ struct Rule {
     kind: &'static str,
     re: Regex,
     scope: Scope,
+    /// 一致しても、これが false を返したら、伏せない(誤検出を減らすための、追加の判定)
+    guard: Option<fn(&Captures) -> bool>,
 }
 
 fn rule(kind: &'static str, pattern: &str, scope: Scope) -> Rule {
-    Rule { kind, re: Regex::new(pattern).unwrap_or_else(|e| panic!("mask rule {kind}: {e}")), scope }
+    Rule { kind, re: Regex::new(pattern).unwrap_or_else(|e| panic!("mask rule {kind}: {e}")), scope, guard: None }
+}
+
+fn guarded(kind: &'static str, pattern: &str, scope: Scope, guard: fn(&Captures) -> bool) -> Rule {
+    Rule { guard: Some(guard), ..rule(kind, pattern, scope) }
+}
+
+/// 秘密ではない「鍵」の名前(データベースのキー・キャッシュのキーなど)。名前に、これらを含むものは、伏せない。
+const NOT_SECRET_KEY_NAMES: [&str; 10] = ["primary", "foreign", "sort", "partition", "cache", "public", "hash", "shard", "lookup", "turn"];
+
+/// `…_key = 値` の値が、鍵らしいか。16 文字以上で、英字と数字が両方入っていて、名前が秘密ではない鍵のものでないこと。
+fn looks_like_a_key_assignment(caps: &Captures) -> bool {
+    let (Some(prefix), Some(value)) = (caps.get(1), caps.get(2)) else { return false };
+    let name = prefix.as_str().to_lowercase();
+    if NOT_SECRET_KEY_NAMES.iter().any(|n| name.contains(n)) {
+        return false;
+    }
+    let value = value.as_str();
+    value.len() >= 16 && value.bytes().any(|b| b.is_ascii_alphabetic()) && value.bytes().any(|b| b.is_ascii_digit())
 }
 
 fn rules() -> &'static [Rule] {
@@ -177,6 +207,13 @@ fn rules() -> &'static [Rule] {
                 r#"(?i)((?-u:\b)[\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)[\w.-]*["']?\s*[:=]\s*["']?)([^\s"',;)}\]]{6,})"#,
                 Group(2),
             ),
+            // 名前が _key / -key / Key で終わる(licenseKey, tabata_key など)。値が鍵らしいときだけ
+            guarded(
+                "key-assignment",
+                r#"((?-u:\b)[\w.-]*(?:(?i:[_.-]key)|Key)["']?\s*[:=]\s*["']?)([A-Za-z0-9+/_=-]{16,})"#,
+                Group(2),
+                looks_like_a_key_assignment,
+            ),
             rule("secret-assignment", r"((?:パスワード|暗証番号|秘密鍵|アクセストークン|API ?キー)\s*(?:は|：|:|=)\s*)([^\s、。,」』)]{6,})", Group(2)),
         ]
     })
@@ -191,6 +228,21 @@ fn mask_blocklist(text: &mut String, block: &Block) -> usize {
             *text = text.replace(literal.as_str(), &mark);
             count += found;
         }
+    }
+    for re in &block.prefixes {
+        let replaced = re
+            .replace_all(text, |caps: &Captures| {
+                let whole = caps.get(0).expect("group 0").as_str();
+                let value = caps.get(3).expect("group 3");
+                if value.as_str().starts_with(MARK) {
+                    return whole.to_string(); // もう伏せてある
+                }
+                count += 1;
+                let start = caps.get(0).expect("group 0").start();
+                format!("{}{mark}", &whole[..value.start() - start])
+            })
+            .into_owned();
+        *text = replaced;
     }
     for re in &block.patterns {
         let replaced = re
@@ -243,6 +295,9 @@ pub fn mask_with(text: &str, lists: &Lists) -> Masked {
                         let Some(g) = caps.get(n) else { return whole.as_str().to_string() };
                         if g.as_str().starts_with(MARK) {
                             return whole.as_str().to_string(); // もう伏せてある
+                        }
+                        if rule.guard.is_some_and(|guard| !guard(caps)) {
+                            return whole.as_str().to_string();
                         }
                         if allow.contains(g.as_str()) {
                             allowed += 1;
@@ -479,5 +534,50 @@ mod tests {
         let big = "a".repeat(LIST_MAX_BYTES + 1);
         assert!(save_texts(&dir, "ok-value-1", &big).is_err());
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn a_line_ending_in_equals_or_colon_masks_the_value_that_follows() {
+        let lists = block("tabata_key=\napi-token:\n");
+        let m = mask_with("tabata_key=fhgiudgt7bdjhsa667w3hdv と api-token: \"abc123\" と tabata_key=", &lists);
+        assert_eq!(m.text, "tabata_key=[MASKED:blocklist] と api-token: \"[MASKED:blocklist]\" と tabata_key=");
+        assert_eq!(m.hits, vec![("blocklist", 2)]);
+        // 一度伏せたものを、もう一度伏せない
+        assert_eq!(mask_with(&m.text, &lists).count(), 0);
+        // 末尾が = でも : でもない行は、これまでどおり、その文字列だけ
+        assert_eq!(mask_with("tabata_key=value1234", &block("tabata_key")).text, "[MASKED:blocklist]=value1234");
+    }
+
+    #[test]
+    fn names_ending_in_key_are_masked_when_the_value_looks_like_a_key() {
+        for text in [
+            "tabata_key=fhgiudgt7bdjhsa667w3hdv",
+            r#"licenseKey: "ABCD-1234-EFGH-5678""#,
+            "LICENSE-KEY = abcd1234efgh5678ijkl",
+            "export MY_APP_KEY=a1b2c3d4e5f6g7h8i9j0",
+        ] {
+            let m = mask(text);
+            assert_eq!(m.count(), 1, "{text} -> {}", m.text);
+            assert!(m.text.contains("[MASKED:key-assignment]"), "{}", m.text);
+        }
+        assert_eq!(mask("tabata_key=fhgiudgt7bdjhsa667w3hdv").text, "tabata_key=[MASKED:key-assignment]");
+    }
+
+    #[test]
+    fn ordinary_keys_in_code_are_left_alone() {
+        for text in [
+            "primary_key=customer_id_column_1234",
+            "cache_key=abcdef1234567890abcd",
+            "sortKey: abcdef1234567890abcd",
+            r#""turnKey": "abcdef1234567890abcd""#, // Web 版の会話画面の識別子
+            "data-turn-key=abcdef1234567890abcd",
+            "public_key=ssh1234567890abcdefgh",
+            "tabata_key=short1",         // 短い
+            "tabata_key=onlyletterslongenoughvalue", // 数字が無い
+            "tabata_key=12345678901234567890",       // 英字が無い
+            "key=abcdef1234567890abcd",              // 名前が key だけ
+        ] {
+            assert_eq!(mask(text).count(), 0, "{text} -> {}", mask(text).text);
+        }
     }
 }
