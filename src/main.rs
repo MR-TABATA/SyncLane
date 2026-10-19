@@ -308,6 +308,15 @@ fn sync_command(conn: &rusqlite::Connection, action: Option<SyncAction>, dry_run
                 "送信: {} バッチ、{} 件(新規 {}、更新 {}、重複 {}、拒否 {})。残り {} 件",
                 report.batches, report.events_sent, report.created, report.updated, report.duplicate, report.rejected, report.pending
             );
+            if report.masked > 0 {
+                println!("  秘密に見える箇所を {} か所、伏せて送りました(手元の記録は、そのままです)", report.masked);
+            }
+            if report.block_lines_ignored > 0 {
+                println!("  mask-block.txt の {} 行は、正規表現として読めないので、無視しました", report.block_lines_ignored);
+            }
+            if report.allowed > 0 {
+                println!("  許可リスト(mask-allow.txt)にある値を {} か所、そのまま送りました", report.allowed);
+            }
             for sample in &report.rejected_samples {
                 println!("  拒否: {sample}");
             }

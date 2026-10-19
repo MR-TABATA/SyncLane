@@ -792,3 +792,100 @@ fn connecting_defaults_to_auto_but_keeps_an_earlier_choice() {
     connect(&conn);
     assert_eq!(store::mode(&conn).unwrap(), Mode::Manual);
 }
+
+// ---- 秘密を伏せる ----
+
+const GITHUB_TOKEN: &str = "ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+
+#[test]
+fn secrets_are_masked_in_what_is_sent_but_not_in_the_local_record() {
+    let env = env();
+    let text = format!("このトークンで push してください: {GITHUB_TOKEN}\nDB_PASSWORD=hunter2hunter2");
+    let id = add_session(&env.conn, "claude-code", "a", &[("a1", &text), ("a2", "はい")]);
+    env.conn.execute("UPDATE sessions SET title = ?1 WHERE id = ?2", rusqlite::params![format!("token {GITHUB_TOKEN} を試す"), id]).unwrap();
+    include(&env, id);
+    let report = run(&env);
+
+    let call = env.server.ingest_calls().remove(0);
+    let sent = call.body.to_string();
+    assert!(!sent.contains(GITHUB_TOKEN) && !sent.contains("hunter2hunter2"), "送った本文に秘密が残っている: {sent}");
+    let event = &call.body["events"][0];
+    assert_eq!(event["content"], "このトークンで push してください: [MASKED:github-token]\nDB_PASSWORD=[MASKED:secret-assignment]");
+    assert_eq!(call.body["sessions"][0]["title"], "token [MASKED:github-token] を試す");
+    // ハッシュは、送った(伏せたあとの)本文のもの
+    let content = event["content"].as_str().unwrap();
+    assert_eq!(event["content_hash"], format!("sha256:{}", engine::sha256_hex(content)));
+    assert_eq!(report.masked, 3);
+
+    // 手元の記録は、元のまま
+    let local: String = env.conn.query_row("SELECT content FROM events WHERE source_event_id = 'a1'", [], |r| r.get(0)).unwrap();
+    assert!(local.contains(GITHUB_TOKEN) && local.contains("hunter2hunter2"));
+}
+
+#[test]
+fn the_secret_is_masked_before_the_cut_so_no_half_of_it_is_sent() {
+    let env = env();
+    // 切れ目(CONTENT_CHARS)をまたぐ位置に、鍵を置く
+    let head = "あ".repeat(engine::CONTENT_CHARS - 10);
+    let id = add_session(&env.conn, "claude-code", "a", &[("a1", &format!("{head}{GITHUB_TOKEN} 以降"))]);
+    include(&env, id);
+    run(&env);
+    let sent = env.server.ingest_calls()[0].body.to_string();
+    assert!(!sent.contains("ghp_"), "鍵の前半が残っている");
+}
+
+#[test]
+fn a_batch_built_before_masking_existed_is_dropped_and_rebuilt_masked() {
+    let env = env();
+    let id = add_session(&env.conn, "claude-code", "a", &[("a1", &format!("token {GITHUB_TOKEN}"))]);
+    include(&env, id);
+    // マスクの導入前に、生の本文で組まれた、未送信のバッチ
+    let raw = json!({"batch_id": "old", "client": {}, "sessions": [], "events": [{"content": format!("token {GITHUB_TOKEN}")}]}).to_string();
+    env.conn.execute(
+        "INSERT INTO sync_outbox(server_id, batch_id, body, event_ids, session_ids, created_at) VALUES (?1, 'old', ?2, '[]', '[]', '2026-10-16T00:00:00.000Z')",
+        rusqlite::params![SERVER, raw],
+    ).unwrap();
+    run(&env);
+    let calls = env.server.ingest_calls();
+    assert!(calls.iter().all(|c| c.body["batch_id"] != "old"), "古いバッチを送ってしまった");
+    assert!(calls.iter().all(|c| !c.body.to_string().contains(GITHUB_TOKEN)));
+    assert_eq!(env.server.events.borrow().len(), 1); // 伏せたうえで、組み直して送られた
+}
+
+#[test]
+fn text_without_secrets_is_sent_unchanged_and_reports_zero() {
+    let env = env();
+    let id = add_session(&env.conn, "claude-code", "a", &[("a1", "ふつうの文章です")]);
+    include(&env, id);
+    let report = run(&env);
+    assert_eq!(env.server.ingest_calls()[0].body["events"][0]["content"], "ふつうの文章です");
+    assert_eq!(report.masked, 0);
+}
+
+#[test]
+fn the_allow_and_block_files_beside_the_database_are_applied() {
+    // /tmp は使わない。プロジェクトの target/ の中に作って、終わったら消す
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("test-mask-allow-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mask-allow.txt"), "# デモ用\ndemo-pass-123\n").unwrap();
+    std::fs::write(dir.join("mask-block.txt"), "# 社内\ncorp-db-01\nre:(?i)project-[a-z]+\nre:([\n").unwrap();
+
+    let conn = db::open(&dir.join("synclane.db")).unwrap();
+    let store = MemoryStore::default();
+    store.set(SERVER, "ingest", "ingest-token").unwrap();
+    store.set(SERVER, "search", "search-token").unwrap();
+    store::save_connection(&conn, &ServerConnection {
+        server: SERVER.into(), device_id: "dev1".into(), user_name: "田中".into(), user_email: "tanaka@example.com".into(),
+    }).unwrap();
+    let server = FakeServer::new();
+    let text = format!("PASSWORD=demo-pass-123 と PASSWORD=real-pass-456 と {GITHUB_TOKEN} と corp-db-01 と Project-Aurora");
+    let id = add_session(&conn, "claude-code", "a", &[("a1", &text)]);
+    store::set_session_state(&conn, SERVER, id, Some("send"), None).unwrap();
+    let report = engine::run(&conn, &server, &store, &no_sleep, &Options::default()).unwrap();
+    drop(conn);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let content = server.ingest_calls()[0].body["events"][0]["content"].as_str().unwrap().to_string();
+    assert_eq!(content, "PASSWORD=demo-pass-123 と PASSWORD=[MASKED:secret-assignment] と [MASKED:github-token] と [MASKED:blocklist] と [MASKED:blocklist]");
+    assert_eq!((report.masked, report.allowed, report.block_lines_ignored), (4, 1, 1));
+}

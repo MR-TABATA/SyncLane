@@ -3507,6 +3507,7 @@ dependencies = [
  "clap",
  "flate2",
  "keyring",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use super::api::{Response, Transport};
 use super::device_flow::platform;
+use super::mask::{self, Lists, MASK_VERSION};
 use super::now_iso;
 use super::parse_time;
 use super::secrets::TokenStore;
@@ -63,6 +64,12 @@ pub struct Report {
     pub rejected: u64,
     pub rejected_samples: Vec<String>,
     pub warnings: u64,
+    /// 送った分のうち、秘密として伏せた箇所の数(種類と中身は、記録しない)
+    pub masked: u64,
+    /// 許可リストにあって、伏せずに送った箇所の数
+    pub allowed: u64,
+    /// `mask-block.txt` の、正規表現として読めず、無視した行の数
+    pub block_lines_ignored: usize,
     /// まだ送っていない発言の数(実行のあと)
     pub pending: i64,
     pub stop: Option<Stop>,
@@ -82,6 +89,9 @@ struct Batch {
     event_ids: Vec<i64>,
     session_ids: Vec<i64>,
     built_at: String,
+    /// このバッチを組むときに伏せた箇所の数(組み直さない送り直しでは、0)
+    masked: usize,
+    allowed: usize,
 }
 
 pub fn sha256_hex(text: &str) -> String {
@@ -96,8 +106,15 @@ fn truncate_chars(text: &str, max: usize) -> (String, bool) {
     (text.chars().take(max).collect(), true)
 }
 
+/// 秘密を伏せた数(`masked`)と、許可リストで通した数(`allowed`)。
+#[derive(Clone, Copy, Default)]
+struct Hits {
+    masked: usize,
+    allowed: usize,
+}
+
 /// 会話の情報(サーバーの `sessions`)。
-fn session_meta(conn: &Connection, server: &str, session_id: i64) -> Result<Option<(String, Value)>> {
+fn session_meta(conn: &Connection, server: &str, session_id: i64, allow: &Lists) -> Result<Option<(String, Value, Hits)>> {
     let row = conn
         .query_row(
             "SELECT s.source_tool, COALESCE(s.source_hash, 'file:' || COALESCE(s.source_file, '')), s.project_path, s.title,
@@ -121,22 +138,28 @@ fn session_meta(conn: &Connection, server: &str, session_id: i64) -> Result<Opti
         .optional()?;
     let Some((tool, source_session_id, path, title, started, ended, visibility)) = row else { return Ok(None) };
     let Some(started) = started else { return Ok(None) }; // 発言が 1 件も無い会話は送らない
+    // 題名は、最初の発言から付くことが多く、秘密が入りうる
+    let title = title.map(|t| mask::mask_with(&t, allow));
+    let hits = Hits { masked: title.as_ref().map_or(0, mask::Masked::count), allowed: title.as_ref().map_or(0, |t| t.allowed) };
     let mut meta = json!({
         "source_tool": tool,
         "source_session_id": source_session_id,
         "project_path": path,
-        "title": title,
+        "title": title.map(|t| t.text),
         "started_at": started,
         "ended_at": ended,
     });
     if let Some(visibility) = visibility {
         meta["visibility"] = json!(visibility);
     }
-    Ok(Some((source_session_id, meta)))
+    Ok(Some((source_session_id, meta, hits)))
 }
 
-fn event_json(event: &PendingEvent, source_session_id: &str) -> Value {
-    let (content, truncated) = truncate_chars(&event.content, CONTENT_CHARS);
+fn event_json(event: &PendingEvent, source_session_id: &str, allow: &Lists) -> (Value, Hits) {
+    // 先に伏せてから切る(切れ目で、秘密が半端に残らないように)。ハッシュは、送る本文のもの
+    let masked = mask::mask_with(&event.content, allow);
+    let hits = Hits { masked: masked.count(), allowed: masked.allowed };
+    let (content, truncated) = truncate_chars(&masked.text, CONTENT_CHARS);
     let mut value = json!({
         "source_tool": event.source_tool,
         "source_session_id": source_session_id,
@@ -150,7 +173,7 @@ fn event_json(event: &PendingEvent, source_session_id: &str) -> Value {
     if truncated {
         value["truncated"] = json!(true);
     }
-    value
+    (value, hits)
 }
 
 /// 次に送るバッチを組む。送るものが無ければ None。組んだら、送る前に outbox へ保存する。
@@ -184,20 +207,29 @@ fn build_batch(conn: &Connection, server: &str, mode: Mode, max_events: usize) -
         }
     }
 
+    let allow = Lists::load_beside(conn);
+    let mut masked = Hits::default();
     let mut sessions = Vec::new();
     let mut source_ids: HashMap<i64, String> = HashMap::new();
     let mut included: Vec<i64> = Vec::new();
     for id in &session_ids {
-        if let Some((source_session_id, meta)) = session_meta(conn, server, *id)? {
+        if let Some((source_session_id, meta, hits)) = session_meta(conn, server, *id, &allow)? {
             source_ids.insert(*id, source_session_id);
             sessions.push(meta);
             included.push(*id);
+            masked.masked += hits.masked;
+            masked.allowed += hits.allowed;
         }
     }
-    let events_json: Vec<Value> = events
-        .iter()
-        .filter_map(|e| source_ids.get(&e.session_id).map(|sid| event_json(e, sid)))
-        .collect();
+    let mut events_json: Vec<Value> = Vec::new();
+    for e in &events {
+        if let Some(sid) = source_ids.get(&e.session_id) {
+            let (value, hits) = event_json(e, sid, &allow);
+            events_json.push(value);
+            masked.masked += hits.masked;
+            masked.allowed += hits.allowed;
+        }
+    }
     let event_ids: Vec<i64> = events.iter().filter(|e| source_ids.contains_key(&e.session_id)).map(|e| e.id).collect();
     if sessions.is_empty() && events_json.is_empty() {
         return Ok(None);
@@ -216,7 +248,20 @@ fn build_batch(conn: &Connection, server: &str, mode: Mode, max_events: usize) -
         "INSERT INTO sync_outbox(server_id, batch_id, body, event_ids, session_ids, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![server, batch_id, body, serde_json::to_string(&event_ids)?, serde_json::to_string(&included)?, built_at],
     )?;
-    Ok(Some(Batch { batch_id, body, event_ids, session_ids: included, built_at }))
+    Ok(Some(Batch { batch_id, body, event_ids, session_ids: included, built_at, masked: masked.masked, allowed: masked.allowed }))
+}
+
+/// 秘密を伏せる前に組んだ、未送信のバッチは、生の本文を含む。送らずに捨てる(発言は、送った印が付くまで
+/// 未送信のままなので、次のバッチで、伏せたうえで組み直される)。ルールを変えたとき(`MASK_VERSION`)も同じ。
+fn discard_unmasked_outbox(conn: &Connection) -> Result<()> {
+    const KEY: &str = "mask_version";
+    let current = MASK_VERSION.to_string();
+    if store::get(conn, KEY)?.as_deref() == Some(current.as_str()) {
+        return Ok(());
+    }
+    conn.execute("DELETE FROM sync_outbox", [])?;
+    store::set(conn, KEY, &current)?;
+    Ok(())
 }
 
 fn load_outbox(conn: &Connection, server: &str) -> Result<Option<Batch>> {
@@ -234,6 +279,8 @@ fn load_outbox(conn: &Connection, server: &str) -> Result<Option<Batch>> {
         event_ids: serde_json::from_str(&event_ids)?,
         session_ids: serde_json::from_str(&session_ids)?,
         built_at,
+        masked: 0,
+        allowed: 0,
     }))
 }
 
@@ -324,6 +371,8 @@ pub fn run(conn: &Connection, t: &dyn Transport, store: &dyn TokenStore, sleep: 
         return Ok(report);
     }
 
+    discard_unmasked_outbox(conn)?;
+    report.block_lines_ignored = Lists::load_beside(conn).block.ignored;
     maintain_tokens(conn, t, store, server);
     let Some(mut token) = store.get(server, "ingest")? else {
         report.stop = Some(Stop::NeedsAuth("送信のトークンがありません。つなぎ直してください".into()));
@@ -360,6 +409,8 @@ pub fn run(conn: &Connection, t: &dyn Transport, store: &dyn TokenStore, sleep: 
                 store::mark_sent(conn, server, &batch.batch_id, &batch.event_ids, &batch.session_ids, &batch.built_at)?;
                 report.batches += 1;
                 report.events_sent += batch.event_ids.len();
+                report.masked += batch.masked as u64;
+                report.allowed += batch.allowed as u64;
             }
             401 => {
                 if !renewed {
@@ -417,7 +468,7 @@ pub fn run(conn: &Connection, t: &dyn Transport, store: &dyn TokenStore, sleep: 
         conn,
         &json!({
             "batches": report.batches, "events_sent": report.events_sent, "created": report.created, "updated": report.updated,
-            "duplicate": report.duplicate, "rejected": report.rejected, "pending": report.pending,
+            "duplicate": report.duplicate, "rejected": report.rejected, "pending": report.pending, "masked": report.masked, "allowed": report.allowed,
             "stop": report.stop.as_ref().map(Stop::message),
         }),
     )?;
