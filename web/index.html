@@ -639,10 +639,7 @@
     }
     $('toggle-search').addEventListener('click', () => { if (!isSearchWindow) openSearchWindow(); });
     document.addEventListener('keydown', (event) => {
-      if (!isSearchWindow && event.metaKey && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        openSearchWindow();
-      } else if (event.key === 'Escape') {
+      if (event.key === 'Escape') {
         if (!$('settings-overlay').hidden) $('settings-overlay').hidden = true;
         else if (isSearchWindow) invoke?.('close_search_window');
         else if (document.body.classList.contains('search-open')) setSearchOpen(false);
@@ -686,6 +683,8 @@
     }
     $('reload-btn').addEventListener('click', () => { showNew(false); load().catch(() => {}); });
     if (!isSearchWindow) window.__TAURI__?.event?.listen('events-updated', () => showNew(true));
+    // ⌘F はアプリのメニュー(検索…)が受けて、ここへ知らせる
+    if (!isSearchWindow) window.__TAURI__?.event?.listen('open-search', () => openSearchWindow());
     // ⌘, はアプリのメニュー(設定…)が受けて、ここへ知らせる
     if (!isSearchWindow) window.__TAURI__?.event?.listen('open-settings', () => {
       $('settings-overlay').hidden = !$('settings-overlay').hidden;

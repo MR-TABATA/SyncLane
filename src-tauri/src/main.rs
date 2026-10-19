@@ -107,6 +107,8 @@ fn mcp_executable() -> Result<String, String> {
 
 /// メニューの「設定…」(⌘,)。選ぶと、画面に `open-settings` を知らせる。
 const OPEN_SETTINGS: &str = "open-settings";
+/// メニューの「検索…」(⌘F)。選ぶと、画面に `open-search` を知らせる。
+const OPEN_SEARCH: &str = "open-search";
 
 /// 画面上部のメニューバー。既定のメニューは英語固定なので、システムの言語に合わせて自前で組む。
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
@@ -143,6 +145,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::copy(app, t("コピー", "Copy"))?,
             &PredefinedMenuItem::paste(app, t("ペースト", "Paste"))?,
             &PredefinedMenuItem::select_all(app, t("すべてを選択", "Select All"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, OPEN_SEARCH, if ja { "検索…" } else { "Find…" }, true, Some("CmdOrCtrl+F"))?,
         ],
     )?;
     let view_menu = Submenu::with_items(
@@ -211,8 +215,9 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_menu_event(|app, event| {
-            if event.id() == OPEN_SETTINGS {
-                let _ = app.emit(OPEN_SETTINGS, ());
+            let id = event.id();
+            if id == OPEN_SETTINGS || id == OPEN_SEARCH {
+                let _ = app.emit(id.as_ref(), ());
             }
         })
         .manage(AppState(shared_conn))
