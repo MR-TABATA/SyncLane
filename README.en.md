@@ -4,7 +4,7 @@
 
 An app (macOS) that saves your conversations with AI tools such as Claude Code, Codex, Gemini and ChatGPT on your own computer, so you can search them later. They are stored in a local SQLite file. **By default nothing is sent anywhere.** Only if you connect to a SyncLane server (for example one your company runs) are the conversations you choose sent there (optional; see "Send to a server" below).
 
-- Search past conversations by keyword or date
+- Search past conversations by keyword or date (with a full-text index; Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger)
 - Reread a day's conversations with AI in a day-by-day timeline
 - Works as an MCP server, so your AI (Claude Code, the Claude app) can search your past conversations (read-only)
 - Free and open source (MIT)

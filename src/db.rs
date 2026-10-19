@@ -207,7 +207,51 @@ pub fn open_memory() -> Result<Connection> {
 
 fn configure(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
-    migrate(conn)
+    migrate(conn)?;
+    ensure_search_index(conn)
+}
+
+/// 発言の全文検索の索引(FTS5、3 文字単位の `trigram`)。発言の本文は、`events` に置いたまま(外部の内容)で、索引だけを持つ。
+/// 日本語も、部分一致で探せる。3 文字未満の語は、索引では探せないので、`LIKE` ではなく `INSTR` で探す。
+///
+/// **スキーマの版は変えない**(版を上げると、古いアプリで開けなくなる)。無ければ作って、いまある発言を取り込む。
+/// 索引は、トリガで `events` に追従する。古いアプリが発言を足しても、トリガが効くので、ずれない。
+const SEARCH_INDEX: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(content, content='events', content_rowid='id', tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE OF content ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO events_fts(rowid, content) VALUES (new.id, new.content);
+END;
+"#;
+
+/// 全文検索の索引が、このデータベースにあるか。
+pub fn has_search_index(conn: &Connection) -> bool {
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events_fts'", [], |_| Ok(())).is_ok()
+}
+
+/// 索引が無ければ作って、いまある発言を取り込む(1 度だけ。あれば、何もしない)。
+fn ensure_search_index(conn: &Connection) -> Result<()> {
+    if has_search_index(conn) {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(SEARCH_INDEX)?;
+    tx.execute("INSERT INTO events_fts(events_fts) VALUES ('rebuild')", [])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 索引を、`events` から作り直す(ずれた疑いがあるとき用)。
+pub fn rebuild_search_index(conn: &Connection) -> Result<()> {
+    ensure_search_index(conn)?;
+    conn.execute("INSERT INTO events_fts(events_fts) VALUES ('rebuild')", [])?;
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -324,6 +368,28 @@ pub fn timeline_range(
     query: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
+    search_events(conn, date_from, date_to, query, limit, has_search_index(conn))
+}
+
+/// 語が、索引で探せるか(3 文字以上)。短い語は、本文を直接探す。
+fn indexable(term: &str) -> bool {
+    term.chars().count() >= 3
+}
+
+/// 索引に渡す問い合わせ(語を、そのまま 1 つの句として扱う。引用符は、重ねて逃がす)。
+fn fts_phrase(term: &str) -> String {
+    format!("\"{}\"", term.replace('"', "\"\""))
+}
+
+/// 検索の本体。`indexed` が true なら、3 文字以上の語を、全文検索の索引で探す。false なら、すべて本文を直接探す(索引が無いとき・比較の試験用)。
+fn search_events(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    indexed: bool,
+) -> Result<Vec<TimelineEvent>> {
     let mut sql = String::from(
         "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
          FROM events e
@@ -341,8 +407,16 @@ pub fn timeline_range(
     if date_to.is_some() {
         conditions.push("e.occurred_at < ?".to_owned());
     }
-    for _ in &terms {
-        conditions.push("(INSTR(LOWER(e.content), LOWER(?)) > 0 OR INSTR(LOWER(s.project_path), LOWER(?)) > 0 OR INSTR(LOWER(COALESCE(s.title, '')), LOWER(?)) > 0)".to_owned());
+    // 索引で探せる語を先に評価する(AND は、前から評価されるので、重い本文の直接検索は、絞られた結果にだけ掛かる)
+    let mut ordered: Vec<&str> = terms.clone();
+    ordered.sort_by_key(|term| !(indexed && indexable(term)));
+    for term in &ordered {
+        let body = if indexed && indexable(term) {
+            "e.id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)"
+        } else {
+            "INSTR(LOWER(e.content), LOWER(?)) > 0"
+        };
+        conditions.push(format!("({body} OR INSTR(LOWER(s.project_path), LOWER(?)) > 0 OR INSTR(LOWER(COALESCE(s.title, '')), LOWER(?)) > 0)"));
     }
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
@@ -358,10 +432,10 @@ pub fn timeline_range(
     if let Some(date) = date_to {
         values.push(Box::new(day_bound(date)));
     }
-    for term in &terms {
-        for _ in 0..3 {
-            values.push(Box::new((*term).to_owned()));
-        }
+    for term in &ordered {
+        values.push(Box::new(if indexed && indexable(term) { fts_phrase(term) } else { (*term).to_owned() }));
+        values.push(Box::new((*term).to_owned()));
+        values.push(Box::new((*term).to_owned()));
     }
     values.push(Box::new(limit as i64));
     let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_timeline_event)?;
@@ -470,6 +544,184 @@ mod tests {
         let results = timeline(&conn, None, Some("SyncLane SQLite"), 20)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "SyncLane SQLite search");
+        Ok(())
+    }
+
+    // ---- 全文検索の索引 ----
+
+    fn corpus(conn: &Connection) {
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('claude-code', '/work/SyncLane', 'a', 'a', '京都旅行の計画')", []).unwrap();
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('codex', '/work/other', 'b', 'b', NULL)", []).unwrap();
+        let rows = [
+            (1, "2026-10-01T01:00:00.000Z", "user", "京都で3日間の旅行を計画したい。のんびり回れる行程を知りたい"),
+            (1, "2026-10-01T01:01:00.000Z", "assistant", "1日目は伏見稲荷、2日目は嵐山、3日目は清水寺がおすすめです。"),
+            (1, "2026-10-02T02:00:00.000Z", "user", "SyncLane の SQLite を Rust で検索したい。FTS5 は使える?"),
+            (1, "2026-10-02T02:01:00.000Z", "assistant", "FTS5 の trigram なら、日本語も部分一致で探せます。syncLANE でも sqlite でも同じです。"),
+            (2, "2026-10-03T03:00:00.000Z", "user", "She said \"hello world\" and left. NEAR AND OR NOT * - (x)"),
+            (2, "2026-10-03T03:01:00.000Z", "assistant", "AB の二文字と、C#、a+b、100%、under_score、back\\slash"),
+            (2, "2026-10-04T04:00:00.000Z", "user", "ＦＵＬＬ ＷＩＤＴＨ と ｈａｌｆ カナ ﾊﾝｶｸ"),
+            (2, "2026-10-04T04:01:00.000Z", "assistant", "tab\tseparated and 改行\nも含む"),
+        ];
+        for (i, (session, at, role, content)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', ?2, ?3, ?4, ?5, ?6)",
+                params![session, format!("e{i}"), at, role, content, i as i64],
+            ).unwrap();
+        }
+    }
+
+    fn ids(events: Vec<TimelineEvent>) -> Vec<i64> {
+        events.into_iter().map(|e| e.event_id).collect()
+    }
+
+    #[test]
+    fn an_indexed_search_returns_the_same_events_as_the_direct_scan() -> Result<()> {
+        let conn = open_memory()?;
+        corpus(&conn);
+        assert!(has_search_index(&conn));
+        let queries = [
+            "京都", "京都旅行", "伏見稲荷", "日本語も部分一致", "sqlite", "SQLITE", "SyncLane", "synclane", "fts5", "FTS5 trigram",
+            "SyncLane sqlite", "trigram 日本語", "京都 清水寺", "AB", "C#", "a+b", "100%", "under_score", "back\\slash",
+            "\"hello", "world\"", "NEAR", "AND", "NOT", "*", "-", "(x)", "hello world", "She said",
+            "ＦＵＬＬ", "ｈａｌｆ", "ﾊﾝｶｸ", "separated", "改行", "存在しない語", "京都 存在しない語", "work", "/work/SyncLane", "旅行の計画", "",
+        ];
+        for query in queries {
+            let with = ids(search_events(&conn, None, None, Some(query), 50, true)?);
+            let without = ids(search_events(&conn, None, None, Some(query), 50, false)?);
+            assert_eq!(with, without, "検索語 {query:?} で、索引ありと総当たりの結果が違う");
+        }
+        // 日付で絞っても、同じ
+        let with = ids(search_events(&conn, Some("2026-10-02"), Some("2026-10-04"), Some("sqlite"), 50, true)?);
+        let without = ids(search_events(&conn, Some("2026-10-02"), Some("2026-10-04"), Some("sqlite"), 50, false)?);
+        assert_eq!(with, without);
+        // 実際に、見つかっている(空の一致を、一致と取り違えていない)
+        assert_eq!(ids(search_events(&conn, None, None, Some("京都旅行"), 50, true)?).len(), 4); // 題名にも当たる会話の全発言
+        assert_eq!(ids(search_events(&conn, None, None, Some("伏見稲荷"), 50, true)?).len(), 1);
+        assert!(search_events(&conn, None, None, Some("存在しない語"), 50, true)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn the_index_follows_inserts_updates_and_deletes() -> Result<()> {
+        let conn = open_memory()?;
+        corpus(&conn);
+        let found = |q: &str| -> Result<usize> { Ok(search_events(&conn, None, None, Some(q), 50, true)?.len()) };
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (2, 'x', 'new', '2026-10-05T00:00:00.000Z', 'user', 'ユニークな新しい発言ABCDEF', 99)", [])?;
+        assert_eq!(found("ABCDEF")?, 1);
+        conn.execute("UPDATE events SET content = '書き換えた本文XYZXYZ' WHERE source_event_id = 'new'", [])?;
+        assert_eq!(found("ABCDEF")?, 0);
+        assert_eq!(found("XYZXYZ")?, 1);
+        conn.execute("DELETE FROM events WHERE source_event_id = 'new'", [])?;
+        assert_eq!(found("XYZXYZ")?, 0);
+        // 索引は、作り直しても、同じ結果
+        rebuild_search_index(&conn)?;
+        assert_eq!(found("伏見稲荷")?, 1);
+        Ok(())
+    }
+
+    fn file_db(name: &str) -> PathBuf {
+        // /tmp は使わない。プロジェクトの target/ の中に作って、終わったら消す
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("test-fts-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("synclane.db")
+    }
+
+    fn drop_index(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("DROP TRIGGER events_fts_ai; DROP TRIGGER events_fts_ad; DROP TRIGGER events_fts_au; DROP TABLE events_fts;").unwrap();
+    }
+
+    #[test]
+    fn a_database_made_before_the_index_gets_it_when_opened_and_keeps_its_schema_version() -> Result<()> {
+        let path = file_db("upgrade");
+        {
+            let conn = open(&path)?;
+            corpus(&conn);
+        }
+        drop_index(&path); // 索引ができる前のデータベースを、真似る
+        {
+            let raw = Connection::open(&path)?;
+            assert!(!has_search_index(&raw));
+        }
+        let conn = open(&path)?;
+        assert!(has_search_index(&conn));
+        assert_eq!(schema_version(&conn)?, SCHEMA_VERSION); // 版は、上がらない
+        assert_eq!(ids(search_events(&conn, None, None, Some("伏見稲荷"), 50, true)?).len(), 1); // 既にあった発言も、探せる
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn a_read_only_connection_falls_back_to_the_direct_scan_when_there_is_no_index() -> Result<()> {
+        let path = file_db("readonly");
+        {
+            let conn = open(&path)?;
+            corpus(&conn);
+        }
+        drop_index(&path);
+        let conn = open_readonly(&path)?;
+        assert!(!has_search_index(&conn));
+        assert_eq!(timeline(&conn, None, Some("伏見稲荷"), 10)?.len(), 1); // 索引が無くても、探せる
+        drop(conn);
+        // 索引があれば、読み取り専用でも、それを使う
+        {
+            let conn = open(&path)?;
+            assert!(has_search_index(&conn));
+        }
+        let conn = open_readonly(&path)?;
+        assert_eq!(timeline(&conn, None, Some("伏見稲荷"), 10)?.len(), 1);
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        Ok(())
+    }
+
+    /// 速さの比較(`cargo test --lib bench -- --ignored --nocapture`)。実行のたびに、時間を表示するだけで、合否は決めない。
+    #[test]
+    #[ignore]
+    fn bench_indexed_search_against_the_direct_scan() -> Result<()> {
+        let path = file_db("bench");
+        let conn = open(&path)?;
+        for session in 0..40 {
+            conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude-code', '/w', ?1, ?1)", [format!("s{session}")])?;
+        }
+        let words = ["京都", "旅行", "家計簿", "検索", "設計", "実装", "確認", "公開", "リリース", "署名", "公証", "題名", "区切り", "会話", "取り込み"];
+        let tx = conn.unchecked_transaction()?;
+        for i in 0..20_000 {
+            let mut body = String::new();
+            for k in 0..120 {
+                body.push_str(words[(i * 7 + k * 3) % words.len()]);
+                body.push_str(if k % 9 == 0 { "。\n" } else { "、" });
+            }
+            body.push_str(&format!("固有の語{i:05}"));
+            tx.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?5, 'x', ?1, ?2, 'user', ?3, ?4)",
+                params![format!("b{i}"), format!("2026-10-{:02}T{:02}:{:02}:00.000Z", 1 + (i / 1440) % 28, (i / 60) % 24, i % 60), body, i as i64, 1 + (i % 40) as i64],
+            )?;
+        }
+        tx.commit()?;
+        let size: i64 = conn.query_row("SELECT SUM(LENGTH(content)) FROM events", [], |r| r.get(0))?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        let with_index = fs::metadata(&path)?.len();
+        println!("発言 20,000 件(会話 40 個)、本文の合計 {} MB", size / 1_000_000);
+        for query in ["固有の語12345", "リリース 取り込み", "リリース 題名 区切り", "公証 署名", "検索"] {
+            let t = std::time::Instant::now();
+            let a = search_events(&conn, None, None, Some(query), 30, false)?.len();
+            let scan = t.elapsed();
+            let t = std::time::Instant::now();
+            let b = search_events(&conn, None, None, Some(query), 30, true)?.len();
+            let indexed = t.elapsed();
+            println!("{query:<14} 総当たり {scan:>10.1?} / 索引 {indexed:>10.1?} ({a} 件・{b} 件)");
+            assert_eq!(a, b);
+        }
+        // 索引を外して、大きさを比べる
+        conn.execute_batch("DROP TRIGGER events_fts_ai; DROP TRIGGER events_fts_ad; DROP TRIGGER events_fts_au; DROP TABLE events_fts; VACUUM;")?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        let without_index = fs::metadata(&path)?.len();
+        println!("データベースの大きさ: 索引なし {:.1} MB / 索引あり {:.1} MB (索引で +{:.1} MB)", without_index as f64 / 1e6, with_index as f64 / 1e6, (with_index as f64 - without_index as f64) / 1e6);
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
         Ok(())
     }
 }
