@@ -193,7 +193,9 @@ pub fn session_events(conn: &Connection, session_id: i64, around: Option<i64>, w
         Some(index) => (index.saturating_sub(window), (index + window + 1).min(all.len())),
         None => (0, (window * 2 + 1).min(all.len())),
     };
-    Ok(all[start..end].to_vec())
+    let mut shown = all[start..end].to_vec();
+    crate::sections::attach(conn, &mut shown)?;
+    Ok(shown)
 }
 
 /// メモリ上の DB(テスト用。src-tauri のテストからも使う)。
@@ -290,6 +292,8 @@ pub struct TimelineEvent {
     pub event_id: i64,
     pub role: String,
     pub content: String,
+    /// この発言が属する区切り(話題のまとまり)の、先頭の発言の ID。`title` は、区切りの題名があれば、それに置き換わっている
+    pub section_start: Option<i64>,
     /// 元のツールでの発言の ID(サーバーの結果と突き合わせて、重複を省くための鍵。`source_tool` と組)
     pub source_event_id: String,
 }
@@ -361,7 +365,9 @@ pub fn timeline_range(
     }
     values.push(Box::new(limit as i64));
     let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_timeline_event)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    crate::sections::attach(conn, &mut events)?;
+    Ok(events)
 }
 
 fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEvent> {
@@ -374,6 +380,7 @@ fn row_to_timeline_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineEv
         content: row.get(5)?,
         title: row.get(6)?,
         event_id: row.get(7)?,
+        section_start: None,
         source_event_id: row.get(8)?,
     })
 }

@@ -48,6 +48,15 @@ Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (cha
 - To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
 
+## Editing conversation titles
+
+Use the ✎ next to a title in the list to rewrite it. Claude Code gives a conversation a title once, at the start, and never updates it when the topic changes.
+
+- A title applies to **one stretch of the conversation (a "section")**, not the whole thing. In a long conversation, changing the title of one topic does not affect the others. Sections start automatically after a gap of **30 minutes or more**, and where the conversation is continued from a summary (where Claude Code summarised a long conversation and carried on). Save a title empty to remove it and go back to the title of the whole conversation.
+- A title you edit is not overwritten by later imports.
+- "Suggest from recent messages": proposes a title from your recent messages with local rules. Nothing leaves your Mac.
+- What is sent to a server is still the title of the whole conversation (section titles are used only on your Mac).
+
 ## Send to a server (optional)
 
 If you connect to a SyncLane server (for example one your company runs), you can send the conversations you choose to it over HTTPS, so your team can search past decisions together. The server is provided separately and is not part of this repository.

@@ -52,6 +52,22 @@ fn timeline(
     db::timeline_range(&conn, date_from.as_deref(), date_to.as_deref(), query.as_deref(), limit).map_err(|e| e.to_string())
 }
 
+/// 題名の提案(手元の規則)。指した発言が属する区切り(話題のまとまり)の、最近の発言から出す。外には何も送らない。
+#[tauri::command]
+fn section_title_suggest(event_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let section = synclane::sections::load(&conn, event_id).map_err(|e| format!("{e:#}"))?;
+    synclane::titles::suggest_local(&section.messages).ok_or_else(|| "提案できる発言がありません".to_string())
+}
+
+/// 指した発言が属する区切りに、題名を付ける。空なら、区切りの題名を外す(会話全体の題名に戻る)。
+/// 付けた題名を返す(外したときは、空の文字列)。
+#[tauri::command]
+fn section_title_set(event_id: i64, title: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::sections::set_title(&conn, event_id, &title).map(Option::unwrap_or_default).map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 fn open_search_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("search") {
@@ -240,6 +256,12 @@ fn main() {
                         eprintln!("synclane title backfill: {error:#}");
                     }
                 }
+                // 要約して続けた位置を、すでに取り込んだ会話にも、さかのぼって残す(1 度だけ)
+                if let Ok(mut conn) = collector_conn.lock() {
+                    if let Err(error) = importer::backfill_claude_breaks(&root, &mut conn) {
+                        eprintln!("synclane section breaks: {error:#}");
+                    }
+                }
                 let codex_root = synclane::paths::codex_sessions_dir();
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
@@ -262,6 +284,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             status, timeline, mcp_executable, open_search_window, close_search_window,
+            section_title_suggest, section_title_set,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set

@@ -262,7 +262,8 @@ pub fn ingest(conn: &mut Connection, payload: &Payload) -> Result<IngestReport> 
     }
     if let Some(title) = payload.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         tx.execute(
-            "UPDATE sessions SET title = ?2 WHERE id = ?1 AND COALESCE(title, '') <> ?2",
+            "UPDATE sessions SET title = ?2 WHERE id = ?1 AND COALESCE(title, '') <> ?2
+               AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'title_manual:' || ?1)",
             params![session_id, title],
         )?;
     }
@@ -528,6 +529,21 @@ mod tests {
         assert_eq!(rows[3], ("10月の答え".into(), "2026-10-15T09:00:00.001Z".into()));
         assert_eq!(rows[4].0, "未来の時刻");
         assert!(rows[4].1.starts_with("2026-10-16T01:00:00")); // 取り込んだ時刻(回答の直後ではなく、末尾)
+        Ok(())
+    }
+
+    #[test]
+    fn a_manual_title_is_not_overwritten_when_the_page_title_changes() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        ingest(&mut conn, &payload(&[("user", "質問")]))?;
+        let id: i64 = conn.query_row("SELECT id FROM sessions", [], |r| r.get(0))?;
+        crate::titles::set_manual(&conn, id, "自分で付けた題名")?;
+        // 画面側の題名が変わって、同じ会話を送り直しても、手動の題名は残る
+        let mut again = payload(&[("user", "質問"), ("assistant", "回答")]);
+        again.title = Some("ページ側の新しい題名".into());
+        ingest(&mut conn, &again)?;
+        let title: String = conn.query_row("SELECT title FROM sessions WHERE id = ?1", [id], |r| r.get(0))?;
+        assert_eq!(title, "自分で付けた題名");
         Ok(())
     }
 }

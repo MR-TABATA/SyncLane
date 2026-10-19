@@ -64,12 +64,14 @@ fn collect_claude_file(
     let mut session_key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
     let mut rows = Vec::new();
     let mut title: Option<String> = None;
+    let mut breaks: Vec<String> = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             report.skipped_lines += 1;
             continue;
         };
         if let Some(found) = ai_title(&value) { title = Some(found); }
+        if let Some(at) = compact_boundary(&value) { breaks.push(at); }
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() { project_path = cwd.to_string(); }
         }
@@ -96,6 +98,7 @@ fn collect_claude_file(
         }
     }
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
+    record_breaks(tx, &source_file, &breaks)?;
     if next_offset != saved_offset {
         tx.execute(
             "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
@@ -453,6 +456,7 @@ fn import_file(
         .to_string();
     let mut rows = Vec::new();
     let mut title: Option<String> = None;
+    let mut breaks: Vec<String> = Vec::new();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line?;
@@ -461,6 +465,7 @@ fn import_file(
             continue;
         };
         if let Some(found) = ai_title(&value) { title = Some(found); }
+        if let Some(at) = compact_boundary(&value) { breaks.push(at); }
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() {
                 project_path = cwd.to_string();
@@ -507,6 +512,7 @@ fn import_file(
         report.events += inserted;
     }
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
+    record_breaks(tx, &source_file, &breaks)?;
     Ok(true)
 }
 
@@ -517,9 +523,60 @@ fn ai_title(value: &Value) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
+/// Claude Code が、長くなった会話を要約して続けるときに書く印(`{"type":"system","subtype":"compact_boundary","timestamp":"…"}`)。その時刻。
+fn compact_boundary(value: &Value) -> Option<String> {
+    if value.get("type")?.as_str()? != "system" || value.get("subtype")?.as_str()? != "compact_boundary" { return None; }
+    value.get("timestamp")?.as_str().map(str::to_owned)
+}
+
+/// 要約して続けた位置を、会話の区切りの手がかりとして、`settings` に残す(`section_break:<会話の ID>:<時刻>`)。
+/// スキーマは変えない。区切りの決め方は `sections.rs`。
+fn record_breaks(tx: &rusqlite::Transaction<'_>, source_file: &str, breaks: &[String]) -> Result<()> {
+    if breaks.is_empty() { return Ok(()); }
+    let session_id: Option<i64> = tx
+        .query_row("SELECT id FROM sessions WHERE source_tool = ?1 AND source_file = ?2", params![CLAUDE_TOOL, source_file], |r| r.get(0))
+        .optional()?;
+    let Some(session_id) = session_id else { return Ok(()); };
+    for at in breaks {
+        tx.execute(
+            "INSERT OR IGNORE INTO settings(key, value) VALUES (?1, '1')",
+            [format!("{}{session_id}:{at}", crate::sections::BREAK_PREFIX)],
+        )?;
+    }
+    Ok(())
+}
+
+/// すでに取り込んだ会話について、記録ファイルから、要約して続けた位置をさかのぼって残す。**1 度だけ**走る
+/// (増分の収集は、読み済みの位置から先しか読まないため、別に走らせる)。返り値は、残した位置の数。
+pub fn backfill_claude_breaks(root: &Path, conn: &mut Connection) -> Result<usize> {
+    const DONE: &str = "section_breaks_backfilled";
+    if crate::sync::store::get(conn, DONE)?.as_deref() == Some("1") { return Ok(0); }
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let tx = conn.transaction()?;
+    let mut found = 0;
+    for path in files {
+        let Ok(file) = File::open(&path) else { continue; };
+        let mut breaks: Vec<String> = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break; };
+            if !line.contains("\"compact_boundary\"") { continue; }
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if let Some(at) = compact_boundary(&value) { breaks.push(at); }
+            }
+        }
+        found += breaks.len();
+        record_breaks(&tx, &path.to_string_lossy(), &breaks)?;
+    }
+    tx.execute("INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = '1'", [DONE])?;
+    tx.commit()?;
+    Ok(found)
+}
+
 fn set_title(tx: &rusqlite::Transaction<'_>, source_file: &str, title: &str) -> Result<()> {
     tx.execute(
-        "UPDATE sessions SET title = ?3 WHERE source_tool = ?1 AND source_file = ?2 AND COALESCE(title, '') <> ?3",
+        "UPDATE sessions SET title = ?3 WHERE source_tool = ?1 AND source_file = ?2 AND COALESCE(title, '') <> ?3
+           AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'title_manual:' || sessions.id)",
         params![CLAUDE_TOOL, source_file, title],
     )?;
     Ok(())
@@ -776,5 +833,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn a_manual_title_survives_a_later_ai_title_in_the_log() -> Result<()> {
+        let temp = tempfile_dir();
+        let path = temp.join("session.jsonl");
+        let mut file = File::create(&path)?;
+        writeln!(file, r#"{{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-13T01:00:00Z","cwd":"/tmp/project","message":{{"content":"調べる"}}}}"#)?;
+        writeln!(file, r#"{{"type":"ai-title","sessionId":"s1","aiTitle":"最初の題名"}}"#)?;
+        let mut conn = db::open_memory()?;
+        import_claude(&temp, None, &mut conn)?;
+        let id: i64 = conn.query_row("SELECT id FROM sessions", [], |r| r.get(0))?;
+        let title = |conn: &Connection| -> Result<String> { Ok(conn.query_row("SELECT title FROM sessions", [], |r| r.get(0))?) };
+        assert_eq!(title(&conn)?, "最初の題名");
+
+        crate::titles::set_manual(&conn, id, "自分の題名")?;
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+        writeln!(file, r#"{{"type":"user","uuid":"u2","sessionId":"s1","timestamp":"2026-10-13T01:05:00Z","cwd":"/tmp/project","message":{{"content":"続き"}}}}"#)?;
+        writeln!(file, r#"{{"type":"ai-title","sessionId":"s1","aiTitle":"Claude Code が付け直した題名"}}"#)?;
+        import_claude(&temp, None, &mut conn)?;
+        assert_eq!(title(&conn)?, "自分の題名");
+        Ok(())
+    }
+
+    fn nonstop_log() -> String {
+        [
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-19T01:00:00.000Z","cwd":"/tmp/p","message":{"content":"話題 A"}}"#,
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","timestamp":"2026-10-19T01:05:00.000Z","cwd":"/tmp/p","message":{"content":[{"type":"text","text":"答え A"}]}}"#,
+            r#"{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-10-19T01:09:30.000Z","content":"Conversation compacted"}"#,
+            r#"{"type":"user","uuid":"u2","sessionId":"s1","timestamp":"2026-10-19T01:10:00.000Z","cwd":"/tmp/p","message":{"content":"話題 B"}}"#,
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    fn breaks(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("SELECT key FROM settings WHERE key LIKE 'section_break:%' ORDER BY key").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn a_compaction_marker_in_the_log_is_recorded_by_both_import_paths() -> Result<()> {
+        let temp = tempfile_dir();
+        std::fs::write(temp.join("session.jsonl"), nonstop_log())?;
+        // 増分の収集
+        let mut conn = db::open_memory()?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        let id: i64 = conn.query_row("SELECT id FROM sessions", [], |r| r.get(0))?;
+        assert_eq!(breaks(&conn), vec![format!("section_break:{id}:2026-10-19T01:09:30.000Z")]);
+        let starts = crate::sections::boundaries(&conn, id)?;
+        assert_eq!(starts.len(), 2); // 休みなく続いていても、要約して続けた位置で、区切れる
+        // 全体の取り込み
+        let mut other = db::open_memory()?;
+        import_claude(&temp, None, &mut other)?;
+        assert_eq!(breaks(&other).len(), 1);
+        // 同じ行を、もう一度取り込んでも、増えない
+        import_claude(&temp, None, &mut other)?;
+        assert_eq!(breaks(&other).len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn the_backfill_records_markers_for_logs_imported_before_and_runs_only_once() -> Result<()> {
+        let temp = tempfile_dir();
+        std::fs::write(temp.join("session.jsonl"), nonstop_log())?;
+        let mut conn = db::open_memory()?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        // 印を取り込む前に、取り込まれた会話を、真似る
+        conn.execute("DELETE FROM settings WHERE key LIKE 'section_break:%'", [])?;
+        assert_eq!(backfill_claude_breaks(&temp, &mut conn)?, 1);
+        assert_eq!(breaks(&conn).len(), 1);
+        // 2 回目は、何もしない
+        conn.execute("DELETE FROM settings WHERE key LIKE 'section_break:%'", [])?;
+        assert_eq!(backfill_claude_breaks(&temp, &mut conn)?, 0);
+        assert_eq!(breaks(&conn).len(), 0);
+        Ok(())
     }
 }
