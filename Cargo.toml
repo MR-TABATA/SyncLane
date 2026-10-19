@@ -1,6 +1,6 @@
 [package]
 name = "synclane"
-version = "0.2.5"
+version = "0.2.9"
 edition = "2024"
 description = "SyncLane: a local-first journal for AI-assisted work history"
 
