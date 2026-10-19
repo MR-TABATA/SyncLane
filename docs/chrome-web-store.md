@@ -53,7 +53,7 @@ Send the conversation open on gemini.google.com or chatgpt.com to the SyncLane a
 
 ## 出す前に残っていること
 
-- スクリーンショット: 撮影済み(`images_movies/chrome-web-store/01-saved-on-your-mac.png`、`02-search.png`。1280×800、ignore 済み)。3 枚目(MCP の設定)は、次のリリースを `/Applications` に入れてから撮る(今の開発ビルドだとパスに自分のユーザー名が写る)。
+- スクリーンショット: 撮影済み(`images_movies/chrome-web-store/01-saved-on-your-mac.png`、`02-search.png`。1280×800、ignore 済み)。3 枚目(`03-mcp.png`、MCP の設定)も撮影済み(0.2.1 を `/Applications` に入れて撮った。パスにユーザー名は写らない)。
 - プライバシーポリシーの公開: ページは作成済み(未コミット)。MrkTools をコミットしてデプロイすると公開される。
 - 開発者登録(Chrome ウェブストアの開発者アカウント。登録料は公式ページで確認)。
 - `manifest.json` の version を、提出のたびに上げる(ストアは同じ版を受け付けない)。
