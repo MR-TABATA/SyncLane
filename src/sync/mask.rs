@@ -89,6 +89,34 @@ impl Lists {
     }
 }
 
+/// 設定の画面から編集する、2 つのファイル(`mask-allow.txt`・`mask-block.txt`)の中身を読む。無ければ空。
+pub fn load_texts(dir: &std::path::Path) -> (String, String) {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+    (read(Allow::FILE_NAME), read(Block::FILE_NAME))
+}
+
+/// 1 つのファイルの大きさの上限(これを超える入力は、受け付けない)
+pub const LIST_MAX_BYTES: usize = 256 * 1024;
+
+/// 設定の画面で入力した中身を、2 つのファイルに書く。正規表現として読めず、無視される行の数を返す。
+/// どちらも空で、ファイルがまだ無いときは、何も作らない。書くときは、いったん別の名前で書いてから置き換える。
+pub fn save_texts(dir: &std::path::Path, allow: &str, block: &str) -> anyhow::Result<usize> {
+    for (name, text) in [(Allow::FILE_NAME, allow), (Block::FILE_NAME, block)] {
+        anyhow::ensure!(text.len() <= LIST_MAX_BYTES, "{name} が大きすぎます({} KB まで)", LIST_MAX_BYTES / 1024);
+    }
+    for (name, text) in [(Allow::FILE_NAME, allow), (Block::FILE_NAME, block)] {
+        let path = dir.join(name);
+        if text.trim().is_empty() && !path.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!("{name}.tmp"));
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &path)?;
+    }
+    Ok(Block::from_text(block).ignored)
+}
+
 /// 伏せた結果。`hits` は (種類, 件数)。`allowed` は、許可リストにあって、伏せずに通した数。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Masked {
@@ -408,5 +436,48 @@ mod tests {
         let m = mask_with("PASSWORD=demo-pass-123", &lists);
         assert_eq!(m.text, "PASSWORD=[MASKED:blocklist]");
         assert_eq!((m.count(), m.allowed), (1, 0));
+    }
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        // /tmp は使わない。プロジェクトの target/ の中に作って、終わったら消す
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("test-mask-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn texts_are_saved_and_read_back_and_broken_regex_lines_are_counted() {
+        let dir = test_dir("save");
+        assert_eq!(load_texts(&dir), (String::new(), String::new())); // まだ何も無い
+        let ignored = save_texts(&dir, "demo-pass-123\n", "corp-db-01\nre:([\nre:acme-\\d+\n").unwrap();
+        assert_eq!(ignored, 1);
+        let (allow, block) = load_texts(&dir);
+        assert_eq!(allow, "demo-pass-123\n");
+        assert_eq!(block, "corp-db-01\nre:([\nre:acme-\\d+\n");
+        // 保存した中身は、そのまま伏せ方に効く
+        let lists = Lists { allow: Allow::from_text(&allow), block: Block::from_text(&block) };
+        assert_eq!(mask_with("corp-db-01 と acme-42", &lists).text, "[MASKED:blocklist] と [MASKED:blocklist]");
+        assert!(!dir.join("mask-allow.txt.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saving_two_empty_texts_creates_no_files_but_clearing_an_existing_one_empties_it() {
+        let dir = test_dir("empty");
+        assert_eq!(save_texts(&dir, "  \n", "").unwrap(), 0);
+        assert!(!dir.exists());
+        save_texts(&dir, "x-value-1", "").unwrap();
+        save_texts(&dir, "", "").unwrap();
+        assert_eq!(load_texts(&dir).0, "");
+        assert!(dir.join("mask-allow.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_input_is_refused_and_writes_nothing() {
+        let dir = test_dir("big");
+        let big = "a".repeat(LIST_MAX_BYTES + 1);
+        assert!(save_texts(&dir, "ok-value-1", &big).is_err());
+        assert!(!dir.exists());
     }
 }

@@ -145,6 +145,24 @@ pub fn sync_set_mode(mode: String, app: State<'_, AppState>) -> Result<(), Strin
     store::set_mode(&conn, Mode::parse(&mode).map_err(message)?).map_err(message)
 }
 
+/// 秘密の伏せ方の設定(許可する値・必ず伏せる語)。データベースの隣のファイルを読み書きする。
+fn mask_dir(sync: &SyncState) -> Result<PathBuf, String> {
+    sync.0.db_path.parent().map(PathBuf::from).ok_or_else(|| "データベースの場所が分かりません".to_string())
+}
+
+#[tauri::command]
+pub fn mask_lists_get(sync: State<'_, SyncState>) -> Result<Value, String> {
+    let (allow, block) = synclane::sync::mask::load_texts(&mask_dir(&sync)?);
+    let ignored = synclane::sync::mask::Block::from_text(&block).ignored;
+    Ok(json!({"allow": allow, "block": block, "ignored": ignored}))
+}
+
+#[tauri::command]
+pub fn mask_lists_set(allow: String, block: String, sync: State<'_, SyncState>) -> Result<Value, String> {
+    let ignored = synclane::sync::mask::save_texts(&mask_dir(&sync)?, &allow, &block).map_err(message)?;
+    Ok(json!({"ignored": ignored}))
+}
+
 #[tauri::command]
 pub fn sync_rules(app: State<'_, AppState>) -> Result<ops::RuleOptions, String> {
     let conn = app.0.lock().map_err(message)?;

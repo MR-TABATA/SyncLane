@@ -264,7 +264,7 @@ fn main() {
             status, timeline, mcp_executable, open_search_window, close_search_window,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
-            sync_app::sync_disconnect, sync_app::sync_now
+            sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running SyncLane");
