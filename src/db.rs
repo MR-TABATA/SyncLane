@@ -208,7 +208,35 @@ pub fn open_memory() -> Result<Connection> {
 fn configure(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
     migrate(conn)?;
+    ensure_tool_calls(conn)?;
     ensure_search_index(conn)
+}
+
+/// ツールの呼び出し(実行したコマンド・触ったファイル・URL)。`tools.rs`。全文検索の索引・MCP・サーバー送信の対象ではない。
+/// **スキーマの版は変えない**(無ければ作るだけ。古いアプリは、この表を使わない)。
+const TOOL_CALLS: &str = r#"
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_tool TEXT NOT NULL,
+    source_call_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    name TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    exit_code INTEGER,
+    UNIQUE (source_tool, source_call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session_time ON tool_calls(session_id, occurred_at);
+"#;
+
+/// ツールの呼び出しの表が、このデータベースにあるか(読み取り専用で開いた、古い版のデータベースには、無いことがある)。
+pub fn has_tool_calls(conn: &Connection) -> bool {
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_calls'", [], |_| Ok(())).is_ok()
+}
+
+fn ensure_tool_calls(conn: &Connection) -> Result<()> {
+    conn.execute_batch(TOOL_CALLS)?;
+    Ok(())
 }
 
 /// 発言の全文検索の索引(FTS5、3 文字単位の `trigram`)。発言の本文は、`events` に置いたまま(外部の内容)で、索引だけを持つ。

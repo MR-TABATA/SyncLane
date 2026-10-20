@@ -121,13 +121,33 @@ pub struct Section {
     pub messages: Vec<(String, String)>,
 }
 
-pub fn load(conn: &Connection, event_id: i64) -> Result<Section> {
+/// ある発言が属する区切りの、範囲(会話・先頭・次の区切りの先頭)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub session_id: i64,
+    pub start: Boundary,
+    /// 次の区切りの先頭。最後の区切りなら None
+    pub next: Option<Boundary>,
+}
+
+pub fn span(conn: &Connection, event_id: i64) -> Result<Span> {
     let (session_id, occurred_at): (i64, String) = conn
         .query_row("SELECT session_id, occurred_at FROM events WHERE id = ?1", [event_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .context("その発言が見つかりません")?;
     let bounds = boundaries(conn, session_id)?;
     let start = section_of(&bounds, &occurred_at, event_id).context("区切りが見つかりません")?.clone();
-    let next = bounds.iter().find(|b| (b.occurred_at.as_str(), b.event_id) > (start.occurred_at.as_str(), start.event_id));
+    let next = bounds.iter().find(|b| (b.occurred_at.as_str(), b.event_id) > (start.occurred_at.as_str(), start.event_id)).cloned();
+    Ok(Span { session_id, start, next })
+}
+
+/// 区切りに付けた題名(無ければ None。そのときは、会話全体の題名を使う)。
+pub fn title_of(conn: &Connection, session_id: i64, start_event_id: i64) -> Result<Option<String>> {
+    Ok(titles(conn)?.remove(&(session_id, start_event_id)))
+}
+
+pub fn load(conn: &Connection, event_id: i64) -> Result<Section> {
+    let Span { session_id, start, next } = span(conn, event_id)?;
+    let next = next.as_ref();
     let mut stmt = conn.prepare(
         "SELECT role, content FROM events
          WHERE session_id = ?1

@@ -134,6 +134,13 @@
     .title-edit { margin-left: 6px; padding: 0 5px; border: 0; background: transparent; color: var(--faint); font-size: 12px; opacity: 0; cursor: pointer; }
     .event:hover .title-edit, .title-edit:focus { opacity: 1; }
     .title-edit:hover { color: var(--text); background: var(--surface-3); }
+    .event:hover .export-btn, .export-btn:focus { opacity: 1; }
+    .export-btn { margin-left: 0; }
+    .export-btn svg { display: block; }
+    .export-panel { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+    .export-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .export-panel .opt-row { margin-top: 10px; align-items: center; }
     .title-panel { width: min(520px, calc(100vw - 48px)); padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .title-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
     .title-panel input[type="text"] { width: 100%; box-sizing: border-box; }
@@ -225,6 +232,23 @@
       </div>
     </div>
   </div>
+  <div id="export-overlay" class="overlay" hidden>
+    <div class="export-panel" role="dialog" aria-labelledby="export-heading">
+      <h2 id="export-heading" data-i18n="exportHeading">この話題を Markdown でコピー</h2>
+      <p class="note" data-i18n="exportScope">この話題の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。</p>
+      <div class="sync-radios">
+        <label class="sync-radio"><input id="export-mask" type="radio" name="export-secrets" checked><span><span data-i18n="exportMask">秘密に見えるものを伏せる（おすすめ）</span><span class="sync-radio-note" data-i18n="exportMaskNote">API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。</span></span></label>
+        <label class="sync-radio"><input id="export-keep" type="radio" name="export-secrets"><span><span data-i18n="exportKeep">そのままコピー</span><span id="export-keep-warn" class="sync-radio-note" data-i18n="exportKeepWarn" hidden>パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。</span></span></label>
+      </div>
+      <p id="export-info" class="note"></p>
+      <textarea id="export-preview" class="export-preview" readonly spellcheck="false"></textarea>
+      <div class="opt-row">
+        <button id="export-copy" class="primary" type="button" data-i18n="exportCopy" disabled>コピー</button>
+        <button id="export-cancel" type="button" data-i18n="close">閉じる</button>
+        <span id="export-status" class="note"></span>
+      </div>
+    </div>
+  </div>
   <div id="settings-overlay" class="overlay" hidden>
     <div class="settings-panel" role="dialog" aria-labelledby="settings-title">
       <div class="settings-head">
@@ -304,6 +328,12 @@
         titleEdit: '題名を編集', titleEditHeading: '題名を編集', titleSuggestLocal: '最近の発言から提案',
         titleScope: 'この題名は、会話の中の、この話題のまとまりにだけ付きます（前の発言と 30 分以上あいた位置、または「続きから」の再開から、次のまとまりが始まります）。空にして保存すると、会話全体の題名に戻ります。',
         titleSave: '保存', titleCancel: 'キャンセル', titleFailed: (e) => `できませんでした: ${e}`,
+        exportBtn: 'この話題を Markdown でコピー', exportHeading: 'この話題を Markdown でコピー',
+        exportScope: 'この話題（前の発言と 30 分以上あいた位置などで区切った、ひとまとまり）の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。',
+        exportMask: '秘密に見えるものを伏せる（おすすめ）', exportMaskNote: 'API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。',
+        exportKeep: 'そのままコピー', exportKeepWarn: 'パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。',
+        exportCopy: 'コピー', exportCopied: 'コピーしました', exportFailed: (e) => `できませんでした: ${e}`,
+        exportInfo: (m, c, x, keep) => keep ? `発言 ${m} 件 / 実行 ${c} 件。秘密に見えるものも、そのまま入ります。` : `発言 ${m} 件 / 実行 ${c} 件。秘密に見えるものを ${x} 件、伏せました。`,
         navMask: '秘密の伏せ方', maskBlock: '必ず伏せる語', maskAllow: '伏せなくてよい値', maskSave: '保存',
         maskIntro: 'サーバーに送る会話は、API キー・トークン・パスワードなど、秘密に見えるものを伏せてから送ります。手元の記録と検索は、元のままです。迷ったら伏せる側に倒しているので、秘密でないものを伏せることもあります。',
         maskBlockHelp: '社内だけの名前（ホスト名・顧客名・案件のコード名など）。1 行に 1 つ。そのままの文字列として探します（大文字小文字は区別）。「名前=」や「名前:」のように = か : で終わる行は、続く値も伏せます（例: tabata_key=）。「re:」で始まる行は正規表現です。',
@@ -323,6 +353,12 @@
         titleEdit: 'Edit title', titleEditHeading: 'Edit title', titleSuggestLocal: 'Suggest from recent messages',
         titleScope: 'This title applies only to this stretch of the conversation (a new one starts after a gap of 30 minutes or more, or when the conversation is continued from a summary). Save it empty to go back to the title of the whole conversation.',
         titleSave: 'Save', titleCancel: 'Cancel', titleFailed: (e) => `Failed: ${e}`,
+        exportBtn: 'Copy this topic as Markdown', exportHeading: 'Copy this topic as Markdown',
+        exportScope: 'Writes out this topic (a stretch of the conversation, split where there was a gap of 30 minutes or more and so on): your messages and the AI\'s, plus the commands that were run and the files that were touched. Tool output and the AI\'s reasoning are not saved, so they are not included.',
+        exportMask: 'Mask anything that looks like a secret (recommended)', exportMaskNote: 'Masks API keys, tokens, passwords and the like. It is the same processing used before sending to a server, and “Always mask” words apply too.',
+        exportKeep: 'Copy as is', exportKeepWarn: 'It may contain passwords or keys. Check where you paste it.',
+        exportCopy: 'Copy', exportCopied: 'Copied', exportFailed: (e) => `Failed: ${e}`,
+        exportInfo: (m, c, x, keep) => keep ? `${m} messages / ${c} tool calls. Anything that looks like a secret is included as is.` : `${m} messages / ${c} tool calls. ${x} things that look like secrets were masked.`,
         navMask: 'Masking secrets', maskBlock: 'Always mask', maskAllow: 'Allow as they are', maskSave: 'Save',
         maskIntro: 'Conversations sent to a server are masked first: API keys, tokens, passwords and anything else that looks like a secret. Your local record and search are unchanged. It errs on the side of masking, so it may also mask something that is not a secret.',
         maskBlockHelp: 'Names only your organisation knows (host names, customer names, project code names). One per line, matched as that exact text (case-sensitive). A line ending in = or : (such as tabata_key=) also masks the value that follows. A line starting with "re:" is a regular expression.',
@@ -618,7 +654,7 @@
       const long = e.content.length > PREVIEW_CHARS;
       const open = long && expanded.has(index);
       const more = long ? `<button class="more" type="button" data-more="${index}">${t(open ? 'collapse' : 'expand')}</button>` : '';
-      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
+      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
     }
     // ---- 題名の編集 ----
     let editingEvent = null;
@@ -653,8 +689,61 @@
         load().catch(() => {});
       } catch (error) { $('title-status').textContent = t('titleFailed', error); }
     });
+    // ---- 話題を Markdown でコピー(書き出しの本体は Rust。ここでは、見本を出して、クリップボードに入れる) ----
+    let exportingEvent = null;
+    let exportSeq = 0;
+    const EXPORT_KEEP_KEY = 'synclane-export-keep-secrets';
+    function exportKeepSaved() { try { return localStorage.getItem(EXPORT_KEEP_KEY) === '1'; } catch (_) { return false; } }
+    function exportKeepSave(keep) { try { localStorage.setItem(EXPORT_KEEP_KEY, keep ? '1' : '0'); } catch (_) {} }
+    async function refreshExport() {
+      if (exportingEvent === null) return;
+      const seq = ++exportSeq; // 続けて切り替えたとき、古い結果で上書きしない
+      const keep = $('export-keep').checked;
+      $('export-keep-warn').hidden = !keep;
+      $('export-status').textContent = '';
+      $('export-copy').disabled = true;
+      try {
+        const result = await invoke('export_section', { eventId: exportingEvent, keepSecrets: keep, lang: resolvedLang(), utcOffsetMinutes: -new Date().getTimezoneOffset() });
+        if (seq !== exportSeq) return;
+        $('export-preview').value = result.markdown;
+        $('export-info').textContent = t('exportInfo', result.messages, result.calls, result.masked, keep);
+        $('export-copy').disabled = false;
+      } catch (error) {
+        if (seq !== exportSeq) return;
+        $('export-preview').value = '';
+        $('export-info').textContent = '';
+        $('export-status').textContent = t('exportFailed', error);
+      }
+    }
+    function openExport(eventId) {
+      exportingEvent = eventId;
+      const keep = exportKeepSaved();
+      $('export-keep').checked = keep;
+      $('export-mask').checked = !keep;
+      $('export-preview').value = '';
+      $('export-info').textContent = '';
+      $('export-overlay').hidden = false;
+      refreshExport();
+    }
+    function closeExport() { $('export-overlay').hidden = true; exportingEvent = null; exportSeq++; }
+    $('export-mask').addEventListener('change', () => { exportKeepSave(false); refreshExport(); });
+    $('export-keep').addEventListener('change', () => { exportKeepSave(true); refreshExport(); });
+    $('export-cancel').addEventListener('click', closeExport);
+    $('export-overlay').addEventListener('click', (event) => { if (event.target === $('export-overlay')) closeExport(); });
+    $('export-copy').addEventListener('click', async () => {
+      const text = $('export-preview').value;
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) { $('export-preview').select(); document.execCommand('copy'); }
+      $('export-status').textContent = t('exportCopied');
+    });
     // 長い本文の「全文を表示 / 折りたたむ」(一覧を組み直さず、その1件だけ差し替える)
     $('timeline').addEventListener('click', (event) => {
+      const copy = event.target.closest?.('[data-export-event]');
+      if (copy) {
+        event.stopPropagation();
+        openExport(Number(copy.dataset.exportEvent));
+        return;
+      }
       const edit = event.target.closest?.('[data-title-event]');
       if (edit) {
         event.stopPropagation();
@@ -757,7 +846,8 @@
     $('toggle-search').addEventListener('click', () => { if (!isSearchWindow) openSearchWindow(); });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
-        if (!$('title-overlay').hidden) closeTitleEditor();
+        if (!$('export-overlay').hidden) closeExport();
+        else if (!$('title-overlay').hidden) closeTitleEditor();
         else if (!$('settings-overlay').hidden) $('settings-overlay').hidden = true;
         else if (isSearchWindow) invoke?.('close_search_window');
         else if (document.body.classList.contains('search-open')) setSearchOpen(false);

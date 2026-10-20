@@ -62,6 +62,25 @@ fn section_title_suggest(event_id: i64, state: tauri::State<'_, AppState>) -> Re
     synclane::titles::suggest_local(&section.messages).ok_or_else(|| "提案できる発言がありません".to_string())
 }
 
+/// 指した発言が属する区切りを、Markdown にする(コピーする前の見本にも、そのまま使う)。外には何も送らない。
+/// `keep_secrets` が true なら、秘密に見えるものも、そのまま書き出す(既定は、伏せる)。`utc_offset_minutes` は、画面の端末の時差。
+#[tauri::command]
+fn export_section(
+    event_id: i64,
+    keep_secrets: bool,
+    lang: String,
+    utc_offset_minutes: i32,
+    state: tauri::State<'_, AppState>,
+) -> Result<synclane::export::Exported, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let options = synclane::export::Options {
+        secrets: if keep_secrets { synclane::export::Secrets::Keep } else { synclane::export::Secrets::Mask },
+        lang: if lang == "ja" { synclane::export::Lang::Ja } else { synclane::export::Lang::En },
+        utc_offset_minutes,
+    };
+    synclane::export::section_markdown(&conn, event_id, &options).map_err(|e| format!("{e:#}"))
+}
+
 /// 指した発言が属する区切りに、題名を付ける。空なら、区切りの題名を外す(会話全体の題名に戻る)。
 /// 付けた題名を返す(外したときは、空の文字列)。
 #[tauri::command]
@@ -265,6 +284,15 @@ fn main() {
                     }
                 }
                 let codex_root = synclane::paths::codex_sessions_dir();
+                // ツールの呼び出し(実行したコマンド・触ったファイル)を、すでに取り込んだ会話にも、さかのぼって保存する(1 度だけ)
+                if let Ok(mut conn) = collector_conn.lock() {
+                    if let Err(error) = importer::backfill_tool_calls_claude(&root, &mut conn) {
+                        eprintln!("synclane tool calls (claude): {error:#}");
+                    }
+                }
+                if let Err(error) = importer::backfill_tool_calls_codex(&collector_conn, &codex_root) {
+                    eprintln!("synclane tool calls (codex): {error:#}");
+                }
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {
@@ -286,7 +314,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             status, timeline, mcp_executable, open_search_window, close_search_window,
-            section_title_suggest, section_title_set,
+            section_title_suggest, section_title_set, export_section,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set

@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::tools::{self, ToolCall};
+
 const CLAUDE_TOOL: &str = "claude_code";
 const GEMINI_TOOL: &str = "gemini_cli";
 const CODEX_TOOL: &str = "codex";
@@ -65,6 +67,7 @@ fn collect_claude_file(
     let mut rows = Vec::new();
     let mut title: Option<String> = None;
     let mut breaks: Vec<String> = Vec::new();
+    let mut calls: Vec<ToolCall> = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             report.skipped_lines += 1;
@@ -72,6 +75,7 @@ fn collect_claude_file(
         };
         if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(at) = compact_boundary(&value) { breaks.push(at); }
+        calls.extend(tools::claude_calls(&value));
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() { project_path = cwd.to_string(); }
         }
@@ -97,6 +101,7 @@ fn collect_claude_file(
             report.events += inserted;
         }
     }
+    store_calls(tx, CLAUDE_TOOL, &source_file, &calls)?;
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     record_breaks(tx, &source_file, &breaks)?;
     if next_offset != saved_offset {
@@ -235,6 +240,8 @@ pub struct CodexParsed {
     pub session_key: Option<String>,
     /// (event_id, occurred_at, role, content, sequence)
     pub rows: Vec<(String, String, &'static str, String, i64)>,
+    /// ツールの呼び出し(実行したコマンド・変更したファイル・MCP の呼び出し)
+    pub calls: Vec<ToolCall>,
     pub next_offset: u64,
     pub skipped_lines: usize,
 }
@@ -294,6 +301,12 @@ pub fn parse_codex_file(path: &Path, offset: u64, date: Option<&str>) -> Result<
             Some("event_msg") => {
                 let Some(payload) = payload else { continue };
                 if payload.get("type").and_then(Value::as_str) != Some("item_completed") {
+                    continue;
+                }
+                if let Some(call) = tools::codex_call(&value) {
+                    if date.is_none_or(|wanted| call.occurred_at.starts_with(wanted)) {
+                        parsed.calls.push(call);
+                    }
                     continue;
                 }
                 let Some(item) = payload.get("item") else { continue };
@@ -373,6 +386,7 @@ pub fn store_codex(conn: &mut Connection, path: &Path, parsed: &CodexParsed, sav
             tx.execute("UPDATE sessions SET title = ?2 WHERE id = ?1 AND title IS NULL", params![session_id, title])?;
         }
     }
+    store_calls(&tx, CODEX_TOOL, &source_file, &parsed.calls)?;
     report.skipped_lines += parsed.skipped_lines;
     if save_offset {
         let saved: i64 = tx
@@ -457,6 +471,7 @@ fn import_file(
     let mut rows = Vec::new();
     let mut title: Option<String> = None;
     let mut breaks: Vec<String> = Vec::new();
+    let mut calls: Vec<ToolCall> = Vec::new();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line?;
@@ -466,6 +481,7 @@ fn import_file(
         };
         if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(at) = compact_boundary(&value) { breaks.push(at); }
+        calls.extend(tools::claude_calls(&value).into_iter().filter(|call| date.is_none_or(|wanted| call.occurred_at.starts_with(wanted))));
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() {
                 project_path = cwd.to_string();
@@ -511,9 +527,24 @@ fn import_file(
         )?;
         report.events += inserted;
     }
+    store_calls(tx, CLAUDE_TOOL, &source_file, &calls)?;
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     record_breaks(tx, &source_file, &breaks)?;
     Ok(true)
+}
+
+/// この記録ファイルの会話(すでにあるとき)に、ツールの呼び出しを保存する。会話がまだ無ければ、何もしない。入れた件数を返す。
+fn store_calls(conn: &Connection, source_tool: &str, source_file: &str, calls: &[ToolCall]) -> Result<usize> {
+    if calls.is_empty() {
+        return Ok(0);
+    }
+    let session_id: Option<i64> = conn
+        .query_row("SELECT id FROM sessions WHERE source_tool = ?1 AND source_file = ?2", params![source_tool, source_file], |row| row.get(0))
+        .optional()?;
+    match session_id {
+        Some(id) => tools::store(conn, id, source_tool, calls),
+        None => Ok(0),
+    }
 }
 
 /// Claude Code がセッションに付ける題名(`{"type":"ai-title","aiTitle":"..."}`)。
@@ -544,6 +575,73 @@ fn record_breaks(tx: &rusqlite::Transaction<'_>, source_file: &str, breaks: &[St
         )?;
     }
     Ok(())
+}
+
+const CLAUDE_CALLS_DONE: &str = "tool_calls_backfilled_claude";
+const CODEX_CALLS_DONE: &str = "tool_calls_backfilled_codex";
+
+/// すでに取り込んだ Claude Code の会話に、記録ファイルから、ツールの呼び出しをさかのぼって保存する。**1 度だけ**走る
+/// (増分の収集は、読み済みの位置から先しか読まないため)。返り値は、入れた件数。記録ファイルが消えていれば、補えない。
+pub fn backfill_tool_calls_claude(root: &Path, conn: &mut Connection) -> Result<usize> {
+    if crate::sync::store::get(conn, CLAUDE_CALLS_DONE)?.as_deref() == Some("1") { return Ok(0); }
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let tx = conn.transaction()?;
+    let mut added = 0;
+    for path in files {
+        let Ok(file) = File::open(&path) else { continue; };
+        let mut calls: Vec<ToolCall> = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break; };
+            if !line.contains("\"tool_use\"") { continue; }
+            if let Ok(value) = serde_json::from_str::<Value>(&line) { calls.extend(tools::claude_calls(&value)); }
+        }
+        added += store_calls(&tx, CLAUDE_TOOL, &path.to_string_lossy(), &calls)?;
+    }
+    tx.execute("INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = '1'", [CLAUDE_CALLS_DONE])?;
+    tx.commit()?;
+    Ok(added)
+}
+
+/// Codex の記録ファイル全体から、ツールの呼び出しだけを読む(DB には触らない。数百 MB になるので、DB のロックの外で呼ぶ)。
+pub fn parse_codex_calls(path: &Path) -> Result<Vec<ToolCall>> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut reader = BufReader::with_capacity(1 << 20, file);
+    let mut calls = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 { break; }
+        if line.last() != Some(&b'\n') { break; }
+        if !contains(&line, b"\"item_completed\"") { continue; }
+        if !(contains(&line, b"\"CommandExecution\"") || contains(&line, b"\"FileChange\"") || contains(&line, b"\"McpToolCall\"")) { continue; }
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            calls.extend(tools::codex_call(&value));
+        }
+    }
+    Ok(calls)
+}
+
+/// すでに取り込んだ Codex の会話に、ツールの呼び出しをさかのぼって保存する。**1 度だけ**走る。
+/// 記録ファイルは大きいので、読む間は DB のロックを持たず、書くときだけ持つ。返り値は、入れた件数。
+pub fn backfill_tool_calls_codex(conn: &std::sync::Mutex<Connection>, root: &Path) -> Result<usize> {
+    let done = |conn: &Connection| -> Result<bool> { Ok(crate::sync::store::get(conn, CODEX_CALLS_DONE)?.as_deref() == Some("1")) };
+    {
+        let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        if done(&conn)? { return Ok(0); }
+    }
+    let mut added = 0;
+    for path in codex_files(root)? {
+        let calls = match parse_codex_calls(&path) {
+            Ok(calls) => calls,
+            Err(error) => { eprintln!("synclane tool calls: {}: {error:#}", path.display()); continue; }
+        };
+        let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        added += store_calls(&conn, CODEX_TOOL, &path.to_string_lossy(), &calls)?;
+    }
+    let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+    crate::sync::store::set(&conn, CODEX_CALLS_DONE, "1")?;
+    Ok(added)
 }
 
 /// すでに取り込んだ会話について、記録ファイルから、要約して続けた位置をさかのぼって残す。**1 度だけ**走る
@@ -820,6 +918,127 @@ mod tests {
         assert_eq!(import_codex(&temp, Some("2026-10-15"), &mut other)?.events, 4);
         assert_eq!(import_codex(&temp, Some("2026-10-14"), &mut other)?.events, 0);
 
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    fn calls_of(conn: &Connection) -> Vec<(String, String, String)> {
+        let mut stmt = conn.prepare("SELECT source_tool, name, detail FROM tool_calls ORDER BY occurred_at, id").unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    fn claude_session_lines() -> [&'static str; 5] {
+        [
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-20T01:00:00Z","cwd":"/work/app","message":{"content":"ビルドが通らない"}}"#,
+            // テキストの無い、ツール呼び出しだけの行(発言としては取り込まれない)
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","timestamp":"2026-10-20T01:00:05Z","cwd":"/work/app","message":{"content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"npm run build"}}]}}"#,
+            r#"{"type":"user","uuid":"r1","sessionId":"s1","timestamp":"2026-10-20T01:00:09Z","cwd":"/work/app","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"出力の本文: SECRET=abc123"}]}}"#,
+            r#"{"type":"assistant","uuid":"a2","sessionId":"s1","timestamp":"2026-10-20T01:01:00Z","cwd":"/work/app","message":{"content":[{"type":"text","text":"設定を直します"},{"type":"tool_use","id":"tu2","name":"Edit","input":{"file_path":"/work/app/tsconfig.json","old_string":"古い本文","new_string":"新しい本文"}}]}}"#,
+            r#"{"type":"assistant","uuid":"a3","sessionId":"s1","timestamp":"2026-10-21T02:00:00Z","cwd":"/work/app","message":{"content":[{"type":"tool_use","id":"tu3","name":"Read","input":{"file_path":"/work/app/README.md"}}]}}"#,
+        ]
+    }
+
+    #[test]
+    fn claude_tool_calls_are_saved_without_results_or_bodies_and_are_idempotent() -> Result<()> {
+        let temp = tempfile_dir();
+        let path = temp.join("session.jsonl");
+        std::fs::write(&path, claude_session_lines().join("\n") + "\n")?;
+        let mut conn = db::open_memory()?;
+        let report = collect_claude_incremental(&temp, &mut conn)?;
+        assert_eq!(report.events, 2); // 発言は、ユーザーとテキストのある AI だけ(これまでどおり)
+        assert_eq!(
+            calls_of(&conn),
+            [
+                ("claude_code".into(), "Bash".into(), "npm run build".into()),
+                ("claude_code".into(), "Edit".into(), "/work/app/tsconfig.json".into()),
+                ("claude_code".into(), "Read".into(), "/work/app/README.md".into()),
+            ]
+        );
+        // 実行結果・編集の本文は、どこにも入らない
+        let dump: String = calls_of(&conn).into_iter().map(|(a, b, c)| format!("{a}{b}{c}")).collect();
+        assert!(!dump.contains("SECRET") && !dump.contains("古い本文") && !dump.contains("新しい本文"));
+        // もう一度読んでも増えない。追記した分だけが増える
+        collect_claude_incremental(&temp, &mut conn)?;
+        assert_eq!(calls_of(&conn).len(), 3);
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+        writeln!(file, r#"{{"type":"assistant","uuid":"a4","sessionId":"s1","timestamp":"2026-10-21T02:05:00Z","cwd":"/work/app","message":{{"content":[{{"type":"tool_use","id":"tu4","name":"Bash","input":{{"command":"git status"}}}}]}}}}"#)?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        assert_eq!(calls_of(&conn).len(), 4);
+        // 全件の取り込み(CLI)でも、重複しない。日付を指定したら、その日の分だけ
+        import_claude(&temp, None, &mut conn)?;
+        assert_eq!(calls_of(&conn).len(), 4);
+        let mut other = db::open_memory()?;
+        import_claude(&temp, Some("2026-10-20"), &mut other)?;
+        assert_eq!(calls_of(&other).len(), 2);
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn claude_tool_calls_are_backfilled_once_for_conversations_already_imported() -> Result<()> {
+        let temp = tempfile_dir();
+        std::fs::write(temp.join("session.jsonl"), claude_session_lines().join("\n") + "\n")?;
+        let mut conn = db::open_memory()?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        // この版より前に取り込んだ状態を作る(読み済みの位置はそのまま、呼び出しだけが無い)
+        conn.execute("DELETE FROM tool_calls", [])?;
+        assert!(calls_of(&conn).is_empty());
+        assert_eq!(collect_claude_incremental(&temp, &mut conn)?.events, 0); // 増分では、もう読まれない
+        assert!(calls_of(&conn).is_empty());
+        assert_eq!(backfill_tool_calls_claude(&temp, &mut conn)?, 3);
+        assert_eq!(calls_of(&conn).len(), 3);
+        // 1 度だけ(消しても、もう一度は走らない)
+        conn.execute("DELETE FROM tool_calls", [])?;
+        assert_eq!(backfill_tool_calls_claude(&temp, &mut conn)?, 0);
+        assert!(calls_of(&conn).is_empty());
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    fn codex_session_lines() -> Vec<String> {
+        vec![
+            r#"{"timestamp":"2026-10-20T11:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"sess-9","cwd":"/work/app"}}"#.into(),
+            r#"{"timestamp":"2026-10-20T11:00:01.000Z","ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"テストを回して"}]}}}"#.into(),
+            r#"{"timestamp":"2026-10-20T11:00:02.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"c1","command":["/bin/zsh","-lc","cargo test"],"cwd":"/work/app","exit_code":0,"aggregated_output":"出力の本文: TOKEN=xyz"}}}"#.into(),
+            r#"{"timestamp":"2026-10-20T11:00:03.000Z","ordinal":3,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"f1","changes":{"/work/app/src/a.rs":{"type":"update","unified_diff":"-古い本文\n+新しい本文","move_path":null}}}}}"#.into(),
+            r#"{"timestamp":"2026-10-20T11:00:04.000Z","ordinal":4,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"m1","server":"synclane","tool":"search_conversations","arguments":{"query":"認証"}}}}"#.into(),
+            r#"{"timestamp":"2026-10-20T11:00:05.000Z","ordinal":5,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","content":[{"type":"text","text":"通りました"}]}}}"#.into(),
+        ]
+    }
+
+    #[test]
+    fn codex_tool_calls_are_saved_and_backfilled_once() -> Result<()> {
+        let temp = tempfile_dir();
+        let day = temp.join("2026").join("10").join("20");
+        std::fs::create_dir_all(&day)?;
+        std::fs::write(day.join("rollout-2026-10-20T20-00-00-xyz.jsonl"), codex_session_lines().join("\n") + "\n")?;
+        let mut conn = db::open_memory()?;
+        let report = collect_codex_incremental(&temp, &mut conn)?;
+        assert_eq!(report.events, 2);
+        assert_eq!(
+            calls_of(&conn),
+            [
+                ("codex".into(), "shell".into(), "cargo test".into()),
+                ("codex".into(), "FileChange".into(), "/work/app/src/a.rs (update)".into()),
+                ("codex".into(), "mcp__synclane__search_conversations".into(), "認証".into()),
+            ]
+        );
+        let dump: String = calls_of(&conn).into_iter().map(|(a, b, c)| format!("{a}{b}{c}")).collect();
+        assert!(!dump.contains("TOKEN") && !dump.contains("古い本文"));
+        let exit: Option<i64> = conn.query_row("SELECT exit_code FROM tool_calls WHERE name = 'shell'", [], |r| r.get(0))?;
+        assert_eq!(exit, Some(0));
+        // 増えない
+        collect_codex_incremental(&temp, &mut conn)?;
+        assert_eq!(calls_of(&conn).len(), 3);
+        // さかのぼり(1 度だけ)
+        conn.execute("DELETE FROM tool_calls", [])?;
+        let shared = std::sync::Mutex::new(conn);
+        assert_eq!(backfill_tool_calls_codex(&shared, &temp)?, 3);
+        assert_eq!(backfill_tool_calls_codex(&shared, &temp)?, 0);
+        assert_eq!(calls_of(&shared.lock().unwrap()).len(), 3);
+        // 日付の指定(CLI): その日だけ
+        let parsed = parse_codex_file(&day.join("rollout-2026-10-20T20-00-00-xyz.jsonl"), 0, Some("2026-10-19"))?;
+        assert!(parsed.calls.is_empty());
         std::fs::remove_dir_all(temp)?;
         Ok(())
     }
