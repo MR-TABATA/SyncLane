@@ -2,12 +2,21 @@
 
 日本語 | [English](README.en.md)
 
-Claude Code・Codex・Gemini・ChatGPT などのAIとの会話を、自分のPCに保存して、あとから検索できるアプリ(macOS)。保存先はPCの中のSQLiteです。**初期状態では、外のサーバーには何も送りません。** 会社などが用意した SyncLane サーバーに自分で接続した場合だけ、選んだ会話を送ります(任意。下の「サーバーに送る」)。
+**AIとの会話を、ぜんぶ残して、あとで探せる。**
 
-- キーワードや日付で、過去の会話を探せる(全文検索の索引つき。日本語も、部分一致で探せます。索引で探せるのは3文字以上の語で、それより短い語は、本文を直接探します。索引のために、データベースが、おおよそ4割大きくなります)
-- 日付ごとのタイムラインで、その日のAIとの会話を読み返せる
-- MCPサーバーとして、AI(Claude Code・Claude アプリ)から、過去の会話を検索できる(読み取り専用)
-- 無料・オープンソース(MIT)
+Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に1か所で保存する、無料のオープンソースアプリ(macOS)。キーワードや日付で探せるほか、AIに探させることもできます。
+
+![日付ごとのタイムライン。左があなたの入力、右がAIの応答](art/readme/ja/timeline.png)
+
+※画面は、作り話の会話です。
+
+- **AIとの会話が、1か所に集まる**: Claude Code と Codex は自動で集め、Web 版の Gemini・ChatGPT は Chrome 拡張で取り込みます。
+- **AIに、自分の過去を聞ける**: MCPサーバーとして動くので、「前にこの問題、どう解決したっけ?」とAIに聞けます(読み取り専用)。
+- **記録が、手元に残る**: 保存先は Mac の中の SQLite です。ツール側で履歴が見られなくなっても、残ります。**初期状態では、外のサーバーには何も送りません。**
+- **日本語も探せる**: 全文検索で、日本語は部分一致で探せます。
+- 無料・オープンソース(MIT)。署名・公証済みの dmg で入れられます([ダウンロード](https://mrktools.app/ja/synclane/download/))。
+
+会社などが用意した SyncLane サーバーに自分で接続した場合だけ、選んだ会話を送ります(任意。下の「サーバーに送る」)。
 
 ## 取り込めるもの
 
@@ -47,6 +56,10 @@ Web 版の Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話は、ロ�
 - 発言の時刻は、ChatGPT は画面にある時刻を使います。Gemini は画面に時刻が無いので、「取り込んだ時刻」になります。文章は、書式(見出し・表など)を外した文字だけです。
 - ソースから使う場合は、このリポジトリの `extension/` フォルダを選びます。zip は、`sh scripts/pack-extension.sh` で作ります。
 - 各サイトが画面の作りを変えると、取り込めなくなることがあります。会話の画面なのに何も読み取れないときは、拡張のアイコンに「!」が出ます(アプリが起動していないときは「×」)。直し方は [`extension/README.md`](extension/README.md) を見てください。
+
+## 検索のしくみ
+
+全文検索の索引つきで、日本語も、部分一致で探せます。索引で探せるのは3文字以上の語で、それより短い語は、本文を直接探します。索引のために、データベースが、おおよそ4割大きくなります。
 
 ## 会話の題名を編集する
 
@@ -94,6 +107,10 @@ Claude アプリ(デスクトップ)には、`claude_desktop_config.json` に次
 { "mcpServers": { "synclane": { "command": "/Applications/SyncLane.app/Contents/MacOS/synclane-app", "args": ["--mcp"] } } }
 ```
 
+登録すると、AIに「SyncLane に聞いて」と頼むだけで、保存した会話から探して答えます。
+
+![Claude Code が SyncLane を検索して、過去の要約を答える様子](art/readme/ja/ask-summary.png)
+
 登録すると、そのAIは、保存した会話をすべて読めます。パスワードや機密のコードが入っていないか、先に確認してください。
 
 ## 開発
@@ -107,6 +124,26 @@ cargo run --manifest-path src-tauri/Cargo.toml --offline
 ```
 
 画面のデータは既定のSQLite（`~/Library/Application Support/SyncLane/synclane.db`）から読み込む。
+
+### Windows でビルドする(試験的・未検証)
+
+**作者は、Windows で動かして確かめていません。** 配布版(インストーラー)は macOS 用だけです。保存先やブラウザを開く処理など、Windows 向けの分岐はコードに入っていますが、ビルドが通るか、画面が動くかは、確認していません。試す場合は、うまくいかなかった点を、[Issues](https://github.com/MR-TABATA/SyncLane/issues) で教えてください。
+
+必要なもの: [Rust](https://rustup.rs)(MSVC 版)、Visual Studio Build Tools(「C++ によるデスクトップ開発」)、Git。画面(Tauri)には、WebView2 も必要です(Windows 11 には、はじめから入っています)。
+
+```powershell
+git clone https://github.com/MR-TABATA/SyncLane.git
+cd SyncLane
+
+# コマンド(画面なし)
+cargo build --release
+.\target\release\synclane.exe --help
+
+# 画面
+cargo run --manifest-path src-tauri/Cargo.toml
+```
+
+保存先は `%LOCALAPPDATA%\SyncLane\synclane.db` です。取り込み元は、`%USERPROFILE%\.claude\projects`(Claude Code)、`%USERPROFILE%\.codex\sessions`(Codex)、`%USERPROFILE%\.gemini\tmp`(Gemini CLI)です。
 
 ### テスト
 

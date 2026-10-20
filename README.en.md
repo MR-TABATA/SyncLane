@@ -2,12 +2,21 @@
 
 [日本語](README.md) | English
 
-An app (macOS) that saves your conversations with AI tools such as Claude Code, Codex, Gemini and ChatGPT on your own computer, so you can search them later. They are stored in a local SQLite file. **By default nothing is sent anywhere.** Only if you connect to a SyncLane server (for example one your company runs) are the conversations you choose sent there (optional; see "Send to a server" below).
+**Keep every conversation you have with AI, and find it again.**
 
-- Search past conversations by keyword or date (with a full-text index; Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger)
-- Reread a day's conversations with AI in a day-by-day timeline
-- Works as an MCP server, so your AI (Claude Code, the Claude app) can search your past conversations (read-only)
-- Free and open source (MIT)
+SyncLane is a free, open-source Mac app that keeps your conversations with Claude Code, Codex, Gemini and ChatGPT in one place on your own computer. Search them by keyword or date, or let your AI search them for you.
+
+![A day-by-day timeline. Your input on the left, the AI's reply on the right](art/readme/en/timeline.png)
+
+*The screen shows made-up conversations.*
+
+- **One place for your AI conversations**: Claude Code and Codex are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
+- **Ask your AI about your own past**: it works as an MCP server, so you can ask “How did we solve this before?” (read-only).
+- **Your record stays on your Mac**: it is stored in a local SQLite file, and stays even if a tool stops showing its history. **By default nothing is sent anywhere.**
+- **Japanese works too**: full-text search, with substring matching for Japanese.
+- Free and open source (MIT). Installs from a signed and notarized dmg ([download](https://mrktools.app/en/synclane/download/)).
+
+Only if you connect to a SyncLane server (for example one your company runs) are the conversations you choose sent there (optional; see "Send to a server" below).
 
 ## What it imports
 
@@ -47,6 +56,10 @@ Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (cha
 - For message times, ChatGPT uses the time shown on the page. Gemini shows none, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
 - To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
+
+## How search works
+
+It has a full-text index, and Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger.
 
 ## Editing conversation titles
 
@@ -94,6 +107,10 @@ For the Claude app (desktop), add this to `claude_desktop_config.json` (you can 
 { "mcpServers": { "synclane": { "command": "/Applications/SyncLane.app/Contents/MacOS/synclane-app", "args": ["--mcp"] } } }
 ```
 
+Once registered, just ask your AI to “ask SyncLane”, and it searches your saved conversations to answer.
+
+![Claude Code searching SyncLane and answering with a summary from the past](art/readme/en/ask-summary.png)
+
 Once registered, that AI can read all of your saved conversations. Check first that they contain no passwords or sensitive code.
 
 ## Development
@@ -107,6 +124,26 @@ cargo run --manifest-path src-tauri/Cargo.toml --offline
 ```
 
 The window reads from the default SQLite file (`~/Library/Application Support/SyncLane/synclane.db`).
+
+### Building on Windows (experimental, untested)
+
+**The author has not run it on Windows.** The download (installer) is for macOS only. The code has Windows branches (for example the save location and opening the browser), but whether it builds and whether the window works has not been checked. If you try it, please tell us what went wrong in [Issues](https://github.com/MR-TABATA/SyncLane/issues).
+
+You need: [Rust](https://rustup.rs) (MSVC toolchain), Visual Studio Build Tools (“Desktop development with C++”) and Git. The window (Tauri) also needs WebView2, which comes with Windows 11.
+
+```powershell
+git clone https://github.com/MR-TABATA/SyncLane.git
+cd SyncLane
+
+# The command (no window)
+cargo build --release
+.\target\release\synclane.exe --help
+
+# The window
+cargo run --manifest-path src-tauri/Cargo.toml
+```
+
+The database is at `%LOCALAPPDATA%\SyncLane\synclane.db`. It reads `%USERPROFILE%\.claude\projects` (Claude Code), `%USERPROFILE%\.codex\sessions` (Codex) and `%USERPROFILE%\.gemini\tmp` (Gemini CLI).
 
 ### Tests
 
