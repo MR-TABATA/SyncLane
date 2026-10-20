@@ -10,7 +10,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 
 ※画面は、作り話の会話です。
 
-- **AIとの会話が、1か所に集まる**: Claude Code と Codex は自動で集め、Web 版の Gemini・ChatGPT は Chrome 拡張で取り込みます。
+- **AIとの会話が、1か所に集まる**: Claude Code・Codex・Gemini CLI は自動で集め、Web 版の Gemini・ChatGPT は Chrome 拡張で取り込みます。
 - **AIに、自分の過去を聞ける**: MCPサーバーとして動くので、「前にこの問題、どう解決したっけ?」とAIに聞けます(読み取り専用)。
 - **記録が、手元に残る**: 保存先は Mac の中の SQLite です。ツール側で履歴が見られなくなっても、残ります。**初期状態では、外のサーバーには何も送りません。**
 - **日本語も探せる**: 全文検索で、日本語は部分一致で探せます。
@@ -25,9 +25,9 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 | Claude Code | アプリ起動中、30秒ごとに自動(`~/.claude/projects`) |
 | Codex(Codex アプリ・Codex CLI) | アプリ起動中、30秒ごとに自動(`~/.codex/sessions`) |
 | Gemini(ウェブ版)・ChatGPT(ウェブ版) | Chrome 拡張([手順](#geminichatgpt-の会話を取り込むchrome-拡張)) |
-| Gemini CLI | コマンド(`import gemini`。ソースからビルド) |
+| Gemini CLI | アプリ起動中、30秒ごとに自動(`~/.gemini/tmp`) |
 
-コマンド(CLI)は、**配布版(dmg)には入っていません**。ソースをビルドして使います(下の「開発」)。配布版のアプリは、画面と、AI から検索するための MCP(`--mcp`)だけです。
+コマンド(CLI)は、**配布版(dmg)には入っていません**。ソースをビルドして使います(下の「開発」)。過去の会話を日付で取り込み直すときなどに使います。配布版のアプリは、画面と、AI から検索するための MCP(`--mcp`)だけです。
 
 保存するのは、あなたの入力と、AIのテキストの応答です。ツールの実行結果と、AIの思考の過程は保存しません。
 
@@ -35,11 +35,16 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 
 [mrktools.app/ja/synclane/download/](https://mrktools.app/ja/synclane/download/) から、dmg をダウンロードして、`SyncLane.app` を `/Applications` に入れます。署名・公証済みで、新しい版は、アプリが自動で知らせます。
 
-アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)を取り込みます。
+アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)、Gemini CLI の新しい会話(`~/.gemini/tmp`)を取り込みます。
 
 ## Gemini・ChatGPT の会話を取り込む(Chrome 拡張)
 
 Web 版の Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話は、ローカルにファイルが無いので、Chrome 拡張で取り込みます。
+
+1. [Chrome ウェブストアの「SyncLane for AI chats」](https://chromewebstore.google.com/detail/synclane-for-ai-chats/jibhikabeebhfbhablfedojafekcmmog?hl=ja)を開き、「Chrome に追加」を押します。
+2. SyncLane を起動したまま、Gemini か ChatGPT で会話を開きます(拡張を入れる前から開いていたタブは、再読み込みしてください)。回答が書き終わると、自動で取り込まれます。
+
+ストアを使わず、手で入れることもできます(開発者向け):
 
 1. 拡張をダウンロードして、展開します。`~/Downloads/SyncLane-extension` フォルダができます(このフォルダは、消さないでください。消すと、拡張が動かなくなります)。
 
@@ -49,12 +54,12 @@ Web 版の Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話は、ロ�
 
 2. Chrome で `chrome://extensions` を開き、右上の「デベロッパー モード」をオンにします。
 3. 「パッケージ化されていない拡張機能を読み込む」で、`~/Downloads/SyncLane-extension` を選びます。
-4. SyncLane を起動したまま、Gemini か ChatGPT で会話を開きます(拡張を入れる前から開いていたタブは、再読み込みしてください)。回答が書き終わると、自動で取り込まれます。
 
 - 送り先は、この Mac の SyncLane アプリ(`127.0.0.1`)だけです。外部のサーバーには送りません。アプリが起動していなければ、あとで送り直します。
 - 取り込まれるのは、**Chrome で開いた会話**です。Gemini アプリ(Mac)やスマホだけで交わした会話は、同期されていても、Chrome で一度開くまで取り込まれません。
 - 発言の時刻は、ChatGPT は画面にある時刻を使います。Gemini は画面に時刻が無いので、「取り込んだ時刻」になります。文章は、書式(見出し・表など)を外した文字だけです。
 - ソースから使う場合は、このリポジトリの `extension/` フォルダを選びます。zip は、`sh scripts/pack-extension.sh` で作ります。
+- 取り込まれないときは、まず、**拡張が有効になっているか**(`chrome://extensions` で、「SyncLane for AI chats」のスイッチがオンか)、SyncLane アプリが起動しているか、タブを再読み込みしたかを、確かめてください。拡張のアイコンに「×」が出ていれば、アプリに届いていません。
 - 各サイトが画面の作りを変えると、取り込めなくなることがあります。会話の画面なのに何も読み取れないときは、拡張のアイコンに「!」が出ます(アプリが起動していないときは「×」)。直し方は [`extension/README.md`](extension/README.md) を見てください。
 
 ## 検索のしくみ
@@ -72,7 +77,7 @@ Web 版の Gemini(gemini.google.com)と ChatGPT(chatgpt.com)の会話は、ロ�
 
 ## サーバーに送る(任意)
 
-会社などが用意した SyncLane サーバーに接続すると、選んだ会話を、そのサーバーへ HTTPS で送れます。チームで過去の経緯を探せるようになります。サーバーは別に提供されるもので、このリポジトリには含まれません。
+会社などが用意した SyncLane サーバーに接続すると、選んだ会話を、そのサーバーへ HTTPS で送れます。チームで過去の経緯を探せるようになります。サーバーは別に提供されるもので、このリポジトリには含まれません。**いまは、提供していません。**
 
 - **接続しなければ、何も送りません。** 接続しても、**既定では何も送りません。** 送る会話を自分で選ぶか、自動のモードにします。
 - 接続は、ブラウザで承認する方式です(アプリにパスワードを入力しません)。端末のトークンは、macOS のキーチェーンに保存します。
@@ -191,7 +196,7 @@ cargo run -- import claude --all
 
 ### Gemini CLIログの取り込み
 
-`import gemini` は `~/.gemini/tmp/**/*.jsonl` を読み、ユーザー入力とGeminiのテキスト応答を追記する。Gemini CLIの更新ログは同じメッセージ配列を繰り返すことがあるため、メッセージIDで重複を除外する。
+アプリは、`~/.gemini/tmp/**/*.jsonl` を、30秒ごとに読みます(大きさが変わったファイルだけ、読み直します)。Gemini CLI は、同じ会話を何度も別のファイルに書き出す(実際の記録で、会話 6 つに対して、ファイルが 2 万個あった)ので、同じ会話の複写は、いちばん新しい 1 つだけを読み、同じ発言の途中経過は、最後の版を採ります。コマンドの `import gemini` も、同じ記録を読み、ユーザー入力とGeminiのテキスト応答を追記する。Gemini CLIの更新ログは同じメッセージ配列を繰り返すことがあるため、メッセージIDで重複を除外する。
 
 ```sh
 cargo run -- import gemini --date YYYY-MM-DD

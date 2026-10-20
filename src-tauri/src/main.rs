@@ -298,6 +298,7 @@ fn main() {
                     }
                 }
                 let codex_root = synclane::paths::codex_sessions_dir();
+                let gemini_root = synclane::paths::gemini_tmp_dir();
                 // ツールの呼び出し(実行したコマンド・触ったファイル)を、すでに取り込んだ会話にも、さかのぼって保存する(1 度だけ)
                 if let Ok(mut conn) = collector_conn.lock() {
                     if let Err(error) = importer::backfill_tool_calls_claude(&root, &mut conn) {
@@ -321,6 +322,16 @@ fn main() {
                     // Codex のログは数百 MB になる。読んで解析する間は DB のロックを持たず、書くときだけ持つ
                     // (初回の取り込みで、画面が固まらないように)
                     collect_codex(&collector_conn, &codex_root, &handle);
+                    // Gemini CLI の記録は小さい。大きさが変わったファイルだけ、読み直す
+                    if let Ok(mut conn) = collector_conn.lock() {
+                        match importer::collect_gemini_incremental(&gemini_root, &mut conn) {
+                            Ok(report) if report.events > 0 => {
+                                let _ = handle.emit("events-updated", report.events);
+                            }
+                            Ok(_) => {}
+                            Err(error) => eprintln!("synclane gemini: {error:#}"),
+                        }
+                    }
                     thread::sleep(Duration::from_secs(30));
                 }
             });

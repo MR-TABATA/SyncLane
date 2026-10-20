@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -137,14 +137,10 @@ pub fn import_claude(root: &Path, date: Option<&str>, conn: &mut Connection) -> 
 /// Gemini CLIのセッションJSONLをSQLiteへ追記する。
 /// Gemini CLIは同じmessages配列を`$set`で何度も書くため、message idで冪等化する。
 pub fn import_gemini(root: &Path, date: Option<&str>, conn: &mut Connection) -> Result<ImportReport> {
-    let mut files = Vec::new();
-    collect_jsonl(root, &mut files)?;
-    files.sort();
-
     let tx = conn.transaction()?;
     let mut report = ImportReport::default();
-    for path in files {
-        if import_gemini_file(&tx, &path, date, &mut report)? {
+    for (path, conversation, _) in gemini_logs(root)? {
+        if import_gemini_file(&tx, &path, &conversation, date, &mut report)? {
             report.files += 1;
         }
     }
@@ -152,20 +148,73 @@ pub fn import_gemini(root: &Path, date: Option<&str>, conn: &mut Connection) -> 
     Ok(report)
 }
 
+/// 記録ファイルの名前(`session-<日時>-<会話 ID の先頭>.jsonl`)から、会話 ID の部分を取り出す。
+/// 例: `session-2026-06-30T06-14-a2a-serv` → `a2a-serv`。この形でなければ None。
+fn gemini_group_suffix(stem: &str) -> Option<&str> {
+    let rest = stem.strip_prefix("session-")?;
+    let (stamp, suffix) = (rest.get(..17)?, rest.get(17..)?); // `2026-06-30T06-14-`
+    let ok = stamp.bytes().enumerate().all(|(i, c)| match i {
+        4 | 7 | 13 | 16 => c == b'-',
+        10 => c == b'T',
+        _ => c.is_ascii_digit(),
+    });
+    (ok && !suffix.is_empty()).then_some(suffix)
+}
+
+/// 読むべき Gemini CLI の記録: (ファイル, 会話の識別子, 大きさ)。
+///
+/// Gemini CLI は、同じ会話を、何度も別のファイルに書き出す(実際の記録で、会話 6 つに対して、ファイルが 2 万個・2 GB あった)。
+/// 同じ会話(同じプロジェクトで、ファイル名の末尾の会話 ID が同じ)の複写は、**いちばん新しい 1 つ**だけを読む。
+/// 会話の識別子は、複写が入れ替わっても変わらない(ファイルの名前ではなく、フォルダと会話 ID から作る)。
+fn gemini_logs(root: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let mut newest: HashMap<String, (PathBuf, std::time::SystemTime, u64)> = HashMap::new();
+    for path in files {
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let conversation = match (gemini_group_suffix(stem), path.parent()) {
+            (Some(suffix), Some(dir)) => format!("{}/session-{suffix}", dir.display()),
+            _ => path.to_string_lossy().into_owned(),
+        };
+        let candidate = (path, modified, meta.len());
+        // 新しいほうを採る。同じなら、大きいほう、さらに同じなら、名前が後のほう
+        let better = newest.get(&conversation).is_none_or(|cur| (modified, candidate.2, &candidate.0) > (cur.1, cur.2, &cur.0));
+        if better {
+            newest.insert(conversation, candidate);
+        }
+    }
+    let mut out: Vec<(PathBuf, String, u64)> = newest.into_iter().map(|(conversation, (path, _, size))| (path, conversation, size)).collect();
+    out.sort();
+    Ok(out)
+}
+
+/// 1 つの記録ファイルを取り込む。`conversation` は、会話の識別子(`gemini_logs` が作る)。
+///
+/// - 同じ発言(ID が同じ)が、途中経過として、何度も書かれる。**最後に出た版**(最終状態)を採る。
+/// - すでに保存してある発言の本文が、いまの版と違えば、更新する(途中経過のまま保存してしまっていた場合に、直る)。
 fn import_gemini_file(
     tx: &rusqlite::Transaction<'_>,
     path: &Path,
+    conversation: &str,
     date: Option<&str>,
     report: &mut ImportReport,
 ) -> Result<bool> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
-    let source_file = path.to_string_lossy().into_owned();
     let mut session_key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
     let project_path = path.parent().and_then(Path::parent).and_then(Path::file_name)
         .and_then(|s| s.to_str()).unwrap_or("(unknown)").to_string();
-    let mut rows = Vec::new();
-    let mut seen_event_ids = HashSet::new();
+    let mut rows: Vec<(String, String, &'static str, String, i64)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut put = |row: (String, String, &'static str, String, i64)| match index.get(&row.0) {
+        Some(&i) => rows[i] = (row.0, row.1, row.2, row.3, rows[i].4), // 最後の版で置き換える(並びは、最初に出た位置のまま)
+        None => {
+            index.insert(row.0.clone(), rows.len());
+            rows.push(row);
+        }
+    };
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line?;
@@ -182,31 +231,104 @@ fn import_gemini_file(
                 if date.is_some_and(|wanted| !occurred_at.starts_with(wanted)) { continue; }
                 let event_id = message.get("id").and_then(Value::as_str).map(str::to_owned)
                     .unwrap_or_else(|| format!("{session_key}:{line_number}:{message_index}"));
-                if seen_event_ids.insert(event_id.clone()) {
-                    rows.push((event_id, occurred_at, role, content, message_index as i64));
-                }
+                put((event_id, occurred_at, role, content, message_index as i64));
             }
         } else if let Some((occurred_at, role, content)) = gemini_message_content(&value) {
             if date.is_some_and(|wanted| !occurred_at.starts_with(wanted)) { continue; }
             let event_id = value.get("id").or_else(|| value.get("uuid")).and_then(Value::as_str)
                 .map(str::to_owned).unwrap_or_else(|| format!("{session_key}:{line_number}"));
-            if seen_event_ids.insert(event_id.clone()) {
-                rows.push((event_id, occurred_at, role, content, line_number as i64));
-            }
+            put((event_id, occurred_at, role, content, line_number as i64));
         }
     }
     if rows.is_empty() { return Ok(false); }
-    let (session_id, created) = find_or_create_session_for_tool(tx, GEMINI_TOOL, &source_file, &project_path, &session_key)?;
-    if created { report.sessions += 1; }
+
+    // 会話: 同じプロジェクトで、会話 ID が同じものが、すでにあれば、それを使う(以前の取り込みで、ファイルごとに作った会話も含む)
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM sessions WHERE source_tool = ?1 AND project_path = ?2 AND source_hash = ?3 ORDER BY id LIMIT 1",
+            params![GEMINI_TOOL, project_path, session_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // 新しい発言が 1 つも無い(すべて、別の会話に、すでに入っている)ときは、中身のない会話を作らない
+    let session_id = match existing {
+        Some(id) => Some(id),
+        None => {
+            let mut any_new = false;
+            for row in &rows {
+                let known: i64 = tx.query_row("SELECT COUNT(*) FROM events WHERE source_tool = ?1 AND source_event_id = ?2", params![GEMINI_TOOL, row.0], |r| r.get(0))?;
+                if known == 0 { any_new = true; break; }
+            }
+            if any_new {
+                let (id, created) = find_or_create_session_for_tool(tx, GEMINI_TOOL, conversation, &project_path, &session_key)?;
+                if created { report.sessions += 1; }
+                Some(id)
+            } else {
+                None
+            }
+        }
+    };
     for (event_id, occurred_at, role, content, sequence) in rows {
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![session_id, GEMINI_TOOL, event_id, occurred_at, role, content, sequence],
-        )?;
+        let inserted = match session_id {
+            Some(session_id) => tx.execute(
+                "INSERT OR IGNORE INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![session_id, GEMINI_TOOL, event_id, occurred_at, role, content, sequence],
+            )?,
+            None => 0,
+        };
         report.events += inserted;
+        if inserted == 0 {
+            // すでにある発言: 本文が違えば(途中経過を保存していた)、最終の版に更新する。件数には数えない
+            tx.execute(
+                "UPDATE events SET content = ?3, occurred_at = ?4 WHERE source_tool = ?1 AND source_event_id = ?2 AND content <> ?3",
+                params![GEMINI_TOOL, event_id, content, occurred_at],
+            )?;
+        }
     }
-    Ok(true)
+    Ok(session_id.is_some())
+}
+
+/// Gemini CLI の記録を、前回から変わったファイルだけ、SQLite へ取り込む(アプリが、一定の間隔で呼ぶ)。
+///
+/// Gemini CLI は、同じファイルの末尾に、会話の状態(同じ発言の途中経過を含む)を書き足していく。Claude Code のように、
+/// 読み終えた位置から先だけを読む形にはできないので、**ファイルの大きさ**を覚えて、大きさが変わったファイルだけを、
+/// 全体読み直す。読むのは、会話ごとに、いちばん新しい複写 1 つだけ(`gemini_logs`)。発言は、最後の版を採るので、読み直しても、
+/// 同じ発言は増えず、書きかけだった本文は、完成した版に直る。
+pub fn collect_gemini_incremental(root: &Path, conn: &mut Connection) -> Result<ImportReport> {
+    let logs = gemini_logs(root)?;
+    let tx = conn.transaction()?;
+    let mut report = ImportReport::default();
+    for (path, conversation, size) in logs {
+        let size = size as i64;
+        let saved_key = path.to_string_lossy().into_owned();
+        let saved: Option<i64> = tx
+            .query_row(
+                "SELECT byte_offset FROM collector_files WHERE source_tool = ?1 AND source_file = ?2",
+                params![GEMINI_TOOL, saved_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if saved == Some(size) {
+            continue; // 前回から変わっていない
+        }
+        match import_gemini_file(&tx, &path, &conversation, None, &mut report) {
+            Ok(true) => report.files += 1,
+            Ok(false) => {}
+            Err(error) => {
+                // 1 つのファイルが読めなくても、ほかのファイルの取り込みは続ける(大きさは覚えず、次回に、また試す)
+                eprintln!("synclane gemini: {}: {error:#}", path.display());
+                continue;
+            }
+        }
+        tx.execute(
+            "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(source_tool, source_file) DO UPDATE SET byte_offset = excluded.byte_offset, updated_at = CURRENT_TIMESTAMP",
+            params![GEMINI_TOOL, saved_key, size],
+        )?;
+    }
+    tx.commit()?;
+    Ok(report)
 }
 
 fn gemini_message_content(value: &Value) -> Option<(String, &'static str, String)> {
@@ -867,6 +989,188 @@ mod tests {
         assert_eq!(report.events, 2);
         assert_eq!(db::counts(&conn)?.events, 2);
 
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    fn gemini_update(id_prefix: &str, at: &str, question: &str, answer: &str) -> String {
+        format!(
+            r#"{{"$set":{{"messages":[{{"id":"{id_prefix}-u","timestamp":"{at}","type":"user","content":[{{"text":"{question}"}}]}},{{"id":"{id_prefix}-g","timestamp":"{at}","type":"gemini","content":[{{"text":"{answer}"}}]}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn gemini_cli_is_collected_automatically_and_only_files_that_changed_are_read_again() -> Result<()> {
+        let temp = tempfile_dir();
+        let chats = temp.join("my-project").join("chats");
+        std::fs::create_dir_all(&chats)?;
+        let first = chats.join("session-a.jsonl");
+        let second = chats.join("session-b.jsonl");
+        let meta = r#"{"sessionId":"sess-a","projectHash":"x","startTime":"2026-10-20T01:00:00.000Z","kind":"main"}"#;
+        std::fs::write(&first, format!("{meta}\n{}\n", gemini_update("a1", "2026-10-20T01:00:00.000Z", "質問1", "回答1")))?;
+        std::fs::write(&second, format!("{}\n", gemini_update("b1", "2026-10-20T02:00:00.000Z", "質問B", "回答B")))?;
+
+        let mut conn = db::open_memory()?;
+        // 初回: 2 ファイル・2 会話・4 発言
+        let report = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((report.files, report.sessions, report.events), (2, 2, 4));
+        let tool: String = conn.query_row("SELECT DISTINCT source_tool FROM sessions", [], |r| r.get(0))?;
+        assert_eq!(tool, "gemini_cli");
+        let (project, key): (String, String) = conn.query_row("SELECT project_path, source_hash FROM sessions WHERE source_file LIKE '%session-a.jsonl'", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        assert_eq!((project.as_str(), key.as_str()), ("my-project", "sess-a"));
+
+        // 変わっていなければ、何も読まない(ファイル 0 件)
+        let again = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((again.files, again.sessions, again.events), (0, 0, 0));
+
+        // 1 つのファイルの末尾に、新しい発言が書き足された: そのファイルだけ読み直し、新しい発言だけが増える(古い発言は、重複しない)
+        let mut file = std::fs::OpenOptions::new().append(true).open(&first)?;
+        writeln!(file, "{}", gemini_update("a2", "2026-10-20T01:05:00.000Z", "質問2", "回答2"))?;
+        writeln!(file, "{}", gemini_update("a1", "2026-10-20T01:00:00.000Z", "質問1", "回答1"))?; // 同じ発言が、また書かれる(Gemini CLI の癖)
+        drop(file);
+        let more = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((more.files, more.sessions, more.events), (1, 0, 2));
+        assert_eq!(db::counts(&conn)?.events, 6);
+        // もう一度: 変わっていない
+        assert_eq!(collect_gemini_incremental(&temp, &mut conn)?.files, 0);
+
+        // 書きかけの行(JSON として読めない)があっても、ほかの行は取り込む。書き終わると(大きさが変わると)、次回に入る
+        let mut file = std::fs::OpenOptions::new().append(true).open(&second)?;
+        write!(file, r#"{{"$set":{{"messages":[{{"id":"b2-u","timestamp":"2026-10-20T03:00:00.000Z","type":"user","content":[{{"text":"書きかけ"#)?;
+        drop(file);
+        let partial = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((partial.events, partial.skipped_lines), (0, 1));
+        let mut file = std::fs::OpenOptions::new().append(true).open(&second)?;
+        writeln!(file, r#""}}]}}]}}}}"#)?;
+        drop(file);
+        assert_eq!(collect_gemini_incremental(&temp, &mut conn)?.events, 1);
+
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    fn set_mtime(path: &Path, seconds_ago: u64) {
+        let at = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+        File::options().write(true).open(path).unwrap().set_modified(at).unwrap();
+    }
+
+    #[test]
+    fn copies_of_the_same_gemini_conversation_are_read_once_from_the_newest_file() -> Result<()> {
+        let temp = tempfile_dir();
+        let chats = temp.join("proj").join("chats");
+        std::fs::create_dir_all(&chats)?;
+        // 同じ会話(末尾の ID が abc12345)の複写が 3 つ。いちばん古い複写にだけ、ほかに無い発言がある(読まれない)
+        let old = chats.join("session-2026-10-20T01-00-abc12345.jsonl");
+        let mid = chats.join("session-2026-10-20T02-00-abc12345.jsonl");
+        let meta = |id: &str| format!(r#"{{"sessionId":"{id}","kind":"main"}}"#);
+        std::fs::write(&old, format!("{}\n{}\n", meta("abc12345-full"), gemini_update("only-old", "2026-10-20T01:00:00.000Z", "古い複写だけの質問", "古い複写だけの回答")))?;
+        std::fs::write(&mid, format!("{}\n{}\n", meta("abc12345-full"), gemini_update("m1", "2026-10-20T02:00:00.000Z", "質問1", "回答1")))?;
+        set_mtime(&old, 3000);
+        set_mtime(&mid, 2000);
+        // 別の会話(末尾が def67890)
+        std::fs::write(chats.join("session-2026-10-20T01-30-def67890.jsonl"), format!("{}\n{}\n", meta("def67890-full"), gemini_update("d1", "2026-10-20T01:30:00.000Z", "質問D", "回答D")))?;
+
+        let mut conn = db::open_memory()?;
+        let report = collect_gemini_incremental(&temp, &mut conn)?;
+        // 読むのは、会話ごとに 1 ファイル(2 ファイル)。会話は 2 つ。発言は、古い複写だけのものを除いた 4 件
+        assert_eq!((report.files, report.sessions, report.events), (2, 2, 4));
+        let old_only: i64 = conn.query_row("SELECT COUNT(*) FROM events WHERE source_event_id LIKE 'only-old%'", [], |r| r.get(0))?;
+        assert_eq!(old_only, 0);
+
+        // 同じ会話の、もっと新しい複写ができた(古い複写の内容も含む): 会話は増えず、新しい発言だけが増える
+        let newest = chats.join("session-2026-10-20T03-00-abc12345.jsonl");
+        std::fs::write(&newest, format!("{}\n{}\n{}\n", meta("abc12345-full"), gemini_update("m1", "2026-10-20T02:00:00.000Z", "質問1", "回答1"), gemini_update("m2", "2026-10-20T03:00:00.000Z", "質問2", "回答2")))?;
+        let more = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((more.files, more.sessions, more.events), (1, 0, 2));
+        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
+        assert_eq!(sessions, 2);
+        // 変わっていなければ、何も読まない
+        assert_eq!(collect_gemini_incremental(&temp, &mut conn)?.files, 0);
+
+        // 既存のコマンド経路(import_gemini)も、同じ選び方(新しい DB で、同じ結果)
+        let mut other = db::open_memory()?;
+        let cli = import_gemini(&temp, None, &mut other)?;
+        assert_eq!((cli.files, cli.sessions, cli.events), (2, 2, 6));
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_gemini_message_written_many_times_is_stored_as_its_last_version_and_later_versions_update_it() -> Result<()> {
+        let temp = tempfile_dir();
+        let chats = temp.join("proj").join("chats");
+        std::fs::create_dir_all(&chats)?;
+        let path = chats.join("session-2026-10-20T01-00-stream001.jsonl");
+        let meta = r#"{"sessionId":"stream001-full","kind":"main"}"#;
+        let snapshot = |text: &str| format!(r#"{{"$set":{{"messages":[{{"id":"u1","timestamp":"2026-10-20T01:00:00.000Z","type":"user","content":[{{"text":"質問"}}]}},{{"id":"g1","timestamp":"2026-10-20T01:00:05.000Z","type":"gemini","content":[{{"text":"{text}"}}]}}]}}}}"#);
+        // 応答が、書きかけの途中経過として、何度も書かれる
+        std::fs::write(&path, format!("{meta}\n{}\n{}\n{}\n", snapshot("あ"), snapshot("あいう"), snapshot("あいうえお")))?;
+        let mut conn = db::open_memory()?;
+        let report = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!(report.events, 2);
+        let content = |conn: &Connection| -> String { conn.query_row("SELECT content FROM events WHERE source_event_id = 'g1'", [], |r| r.get(0)).unwrap() };
+        assert_eq!(content(&conn), "あいうえお"); // 最初の「あ」ではなく、最後の版
+
+        // 続きが書き足された: 発言は増えず、本文だけが更新される。全文検索の索引も、更新に追従する
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+        writeln!(file, "{}", snapshot("あいうえおかきく"))?;
+        drop(file);
+        let again = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!(again.events, 0);
+        assert_eq!(content(&conn), "あいうえおかきく");
+        assert_eq!(db::counts(&conn)?.events, 2);
+        assert_eq!(db::timeline(&conn, None, Some("かきく"), 10)?.len(), 1);
+        assert!(db::timeline(&conn, None, Some("あいうえお。"), 10)?.is_empty());
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_gemini_conversation_whose_messages_are_all_stored_already_does_not_make_an_empty_conversation() -> Result<()> {
+        let temp = tempfile_dir();
+        let one = temp.join("proj-one").join("chats");
+        let two = temp.join("proj-two").join("chats");
+        std::fs::create_dir_all(&one)?;
+        std::fs::create_dir_all(&two)?;
+        let meta = |id: &str| format!(r#"{{"sessionId":"{id}","kind":"main"}}"#);
+        // 別のプロジェクトの別の会話が、同じ ID の発言を含んでいる(実際の記録で、あった)
+        std::fs::write(one.join("session-2026-10-20T01-00-aaaaaaaa.jsonl"), format!("{}\n{}\n", meta("aaaaaaaa-1"), gemini_update("same", "2026-10-20T01:00:00.000Z", "質問", "回答")))?;
+        std::fs::write(two.join("session-2026-10-20T02-00-bbbbbbbb.jsonl"), format!("{}\n{}\n", meta("bbbbbbbb-1"), gemini_update("same", "2026-10-20T01:00:00.000Z", "質問", "回答")))?;
+        let mut conn = db::open_memory()?;
+        let report = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((report.sessions, report.events), (1, 2));
+        let empty: i64 = conn.query_row("SELECT COUNT(*) FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id)", [], |r| r.get(0))?;
+        assert_eq!(empty, 0, "中身のない会話ができている");
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn gemini_file_names_are_split_into_a_timestamp_and_a_conversation_id() {
+        assert_eq!(gemini_group_suffix("session-2026-06-30T06-14-a2a-serv"), Some("a2a-serv"));
+        assert_eq!(gemini_group_suffix("session-2026-10-15T12-17-f7b30d28"), Some("f7b30d28"));
+        assert_eq!(gemini_group_suffix("session-2026-10-15T12-17-"), None);
+        assert_eq!(gemini_group_suffix("session-2026-1015T12-17-abc"), None);
+        assert_eq!(gemini_group_suffix("session"), None);
+        assert_eq!(gemini_group_suffix("rollout-2026-10-15T12-17-abc"), None);
+    }
+
+    #[test]
+    fn gemini_cli_collection_copes_with_a_missing_folder_and_an_empty_file() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        // 記録の場所が無い(Gemini CLI を使っていない人)
+        let nowhere = std::env::temp_dir().join("synclane-no-such-gemini-dir");
+        let report = collect_gemini_incremental(&nowhere, &mut conn)?;
+        assert_eq!((report.files, report.events), (0, 0));
+        // 発言のないファイル(メタ情報だけ): 会話は作らず、大きさは覚える(毎回読み直さない)
+        let temp = tempfile_dir();
+        let chats = temp.join("p").join("chats");
+        std::fs::create_dir_all(&chats)?;
+        std::fs::write(chats.join("empty.jsonl"), "{\"sessionId\":\"s\",\"kind\":\"main\"}\n")?;
+        let report = collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!((report.files, report.sessions, report.events), (0, 0, 0));
+        let saved: i64 = conn.query_row("SELECT COUNT(*) FROM collector_files WHERE source_tool = 'gemini_cli'", [], |r| r.get(0))?;
+        assert_eq!(saved, 1);
         std::fs::remove_dir_all(temp)?;
         Ok(())
     }

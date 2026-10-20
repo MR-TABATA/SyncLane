@@ -10,7 +10,7 @@ SyncLane is a free, open-source Mac app that keeps your conversations with Claud
 
 *The screen shows made-up conversations.*
 
-- **One place for your AI conversations**: Claude Code and Codex are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
+- **One place for your AI conversations**: Claude Code, Codex and Gemini CLI are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
 - **Ask your AI about your own past**: it works as an MCP server, so you can ask “How did we solve this before?” (read-only).
 - **Your record stays on your Mac**: it is stored in a local SQLite file, and stays even if a tool stops showing its history. **By default nothing is sent anywhere.**
 - **Japanese works too**: full-text search, with substring matching for Japanese.
@@ -25,9 +25,9 @@ Only if you connect to a SyncLane server (for example one your company runs) are
 | Claude Code | Automatic every 30 seconds while the app runs (`~/.claude/projects`) |
 | Codex (Codex app, Codex CLI) | Automatic every 30 seconds while the app runs (`~/.codex/sessions`) |
 | Gemini (web), ChatGPT (web) | Chrome extension ([how](#importing-gemini-and-chatgpt-conversations-chrome-extension)) |
-| Gemini CLI | Command (`import gemini`; build from source) |
+| Gemini CLI | Automatic every 30 seconds while the app runs (`~/.gemini/tmp`) |
 
-The command (CLI) is **not included in the download (dmg)**. Build it from the source (see "Development" below). The downloaded app only has the window and the MCP server (`--mcp`) your AI uses to search.
+The command (CLI) is **not included in the download (dmg)**. Build it from the source (see "Development" below). Use it, for example, to import past conversations again for a given date. The downloaded app only has the window and the MCP server (`--mcp`) your AI uses to search.
 
 It saves your input and the AI's text replies. Tool output and the AI's reasoning are not saved.
 
@@ -35,11 +35,16 @@ It saves your input and the AI's text replies. Tool output and the AI's reasonin
 
 Download the dmg from [mrktools.app/en/synclane/download/](https://mrktools.app/en/synclane/download/) and put `SyncLane.app` in `/Applications`. It is signed and notarized, and the app tells you when a new version is out.
 
-While the app is running, it imports new Claude Code conversations (`~/.claude/projects`) and new Codex conversations (`~/.codex/sessions`) every 30 seconds.
+While the app is running, it imports new Claude Code conversations (`~/.claude/projects`), new Codex conversations (`~/.codex/sessions`) and new Gemini CLI conversations (`~/.gemini/tmp`) every 30 seconds.
 
 ## Importing Gemini and ChatGPT conversations (Chrome extension)
 
 Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (chatgpt.com) have no local files, so a Chrome extension imports them.
+
+1. Open [“SyncLane for AI chats” on the Chrome Web Store](https://chromewebstore.google.com/detail/synclane-for-ai-chats/jibhikabeebhfbhablfedojafekcmmog) and click "Add to Chrome".
+2. Keep SyncLane running and open a conversation on Gemini or ChatGPT (reload tabs that were already open before you installed the extension). It is imported automatically once the answer is finished.
+
+You can also install it by hand without the store (for developers):
 
 1. Download and unzip the extension. This makes a `~/Downloads/SyncLane-extension` folder (do not delete it, or the extension stops working).
 
@@ -49,12 +54,12 @@ Conversations on the web versions of Gemini (gemini.google.com) and ChatGPT (cha
 
 2. Open `chrome://extensions` in Chrome and turn on "Developer mode" (top right).
 3. Click "Load unpacked" and choose `~/Downloads/SyncLane-extension`.
-4. Keep SyncLane running and open a conversation on Gemini or ChatGPT (reload tabs that were already open before you installed the extension). It is imported automatically once the answer is finished.
 
 - It sends data only to the SyncLane app on this Mac (`127.0.0.1`), never to an external server. If the app is not running, it retries later.
 - Only **conversations opened in Chrome** are imported. A conversation held only in the Gemini Mac app or on your phone is not imported, even though it syncs, until you open it once in Chrome.
 - For message times, ChatGPT uses the time shown on the page. Gemini shows none, so the time recorded is when it was imported. Text is plain: formatting such as headings and tables is dropped.
 - To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
+- If nothing is imported, first check that **the extension is turned on** (the switch for “SyncLane for AI chats” at `chrome://extensions`), that the SyncLane app is running, and that you reloaded the tab. If the extension icon shows “×”, the conversation did not reach the app.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
 
 ## How search works
@@ -72,7 +77,7 @@ Use the ✎ next to a title in the list to rewrite it. Claude Code gives a conve
 
 ## Send to a server (optional)
 
-If you connect to a SyncLane server (for example one your company runs), you can send the conversations you choose to it over HTTPS, so your team can search past decisions together. The server is provided separately and is not part of this repository.
+If you connect to a SyncLane server (for example one your company runs), you can send the conversations you choose to it over HTTPS, so your team can search past decisions together. The server is provided separately and is not part of this repository. **It is not available yet.**
 
 - **If you do not connect, nothing is sent.** Even after connecting, **nothing is sent by default**: you pick the conversations, or turn on the automatic mode.
 - You connect by approving in your browser (the app never asks for a password). The device token is kept in the macOS keychain.
@@ -191,7 +196,7 @@ cargo run -- import claude --all
 
 ### Importing Gemini CLI logs
 
-`import gemini` reads `~/.gemini/tmp/**/*.jsonl` and appends your input and Gemini's text replies. Gemini CLI's update log can repeat the same message array, so duplicates are dropped by message ID.
+The app reads `~/.gemini/tmp/**/*.jsonl` every 30 seconds (only files whose size changed are read again). Gemini CLI writes the same conversation to many files (in a real log, 6 conversations had about 20,000 files), so only the newest copy of a conversation is read, and the last version of a message that was written many times is kept. The `import gemini` command reads the same logs and appends your input and Gemini's text replies. Gemini CLI's update log can repeat the same message array, so duplicates are dropped by message ID.
 
 ```sh
 cargo run -- import gemini --date YYYY-MM-DD

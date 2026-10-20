@@ -99,7 +99,8 @@
     .event-content a { color: var(--source); }
     .more { margin-top: 8px; padding: 2px 0; border: 0; background: none; color: var(--source); font-size: 12px; }
     .more:hover:not(:disabled) { background: none; text-decoration: underline; }
-    .event-meta .title { color: var(--text); font-weight: 600; }
+    .event-meta .title { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event-actions { display: inline-flex; align-items: center; flex: none; white-space: nowrap; }
     .empty { color: var(--faint); padding: 40px 0; }
     .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
     /* 設定(MrkDown と同じ作り: 左に項目、右に中身) */
@@ -139,7 +140,7 @@
     .export-btn svg { display: block; }
     .export-panel { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .export-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
-    .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .export-panel .opt-row { margin-top: 10px; align-items: center; }
     .title-panel { width: min(520px, calc(100vw - 48px)); padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .title-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
@@ -658,7 +659,7 @@
       const long = e.content.length > PREVIEW_CHARS;
       const open = long && expanded.has(index);
       const more = long ? `<button class="more" type="button" data-more="${index}">${t(open ? 'collapse' : 'expand')}</button>` : '';
-      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>${(e.source_tool === 'claude_code' || e.source_tool === 'codex' || e.source_tool === 'gemini_cli') ? `<button class="title-edit export-btn" type="button" data-resume-open-event="${e.event_id}" title="${t('resumeOpenBtn')}" aria-label="${t('resumeOpenBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="7 4 19 12 7 20 7 4"/></svg></button><button class="title-edit export-btn" type="button" data-resume-event="${e.event_id}" title="${t('resumeBtn')}" aria-label="${t('resumeBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ''}</div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
+      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><span class="event-actions"><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>${(e.source_tool === 'claude_code' || e.source_tool === 'codex' || e.source_tool === 'gemini_cli') ? `<button class="title-edit export-btn" type="button" data-resume-open-event="${e.event_id}" title="${t('resumeOpenBtn')}" aria-label="${t('resumeOpenBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="7 4 19 12 7 20 7 4"/></svg></button><button class="title-edit export-btn" type="button" data-resume-event="${e.event_id}" title="${t('resumeBtn')}" aria-label="${t('resumeBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ''}</span></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
     }
     // ---- 題名の編集 ----
     let editingEvent = null;
@@ -803,7 +804,7 @@
       const edit = event.target.closest?.('[data-title-event]');
       if (edit) {
         event.stopPropagation();
-        const span = edit.previousElementSibling;
+        const span = edit.closest('.event-meta').querySelector('.title');
         // 題名が無い会話は、プロジェクトのパスを出しているだけなので、空にして始める
         openTitleEditor(Number(edit.dataset.titleEvent), span && span.textContent !== span.title ? span.textContent : '');
         return;
