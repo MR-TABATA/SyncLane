@@ -328,6 +328,8 @@
         titleEdit: '題名を編集', titleEditHeading: '題名を編集', titleSuggestLocal: '最近の発言から提案',
         titleScope: 'この題名は、会話の中の、この話題のまとまりにだけ付きます（前の発言と 30 分以上あいた位置、または「続きから」の再開から、次のまとまりが始まります）。空にして保存すると、会話全体の題名に戻ります。',
         titleSave: '保存', titleCancel: 'キャンセル', titleFailed: (e) => `できませんでした: ${e}`,
+        resumeOpenBtn: 'ターミナルで、この会話を再開', resumeOpened: (c) => `ターミナルを開きました: ${c}`,
+        resumeBtn: 'この会話を再開するコマンドをコピー', resumeNone: 'この会話には、再開するコマンドがありません', resumeCopied: (c) => `コピーしました: ${c}`, resumeFailed: (e) => `できませんでした: ${e}`,
         exportBtn: 'この話題を Markdown でコピー', exportHeading: 'この話題を Markdown でコピー',
         exportScope: 'この話題（前の発言と 30 分以上あいた位置などで区切った、ひとまとまり）の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。',
         exportMask: '秘密に見えるものを伏せる（おすすめ）', exportMaskNote: 'API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。',
@@ -353,6 +355,8 @@
         titleEdit: 'Edit title', titleEditHeading: 'Edit title', titleSuggestLocal: 'Suggest from recent messages',
         titleScope: 'This title applies only to this stretch of the conversation (a new one starts after a gap of 30 minutes or more, or when the conversation is continued from a summary). Save it empty to go back to the title of the whole conversation.',
         titleSave: 'Save', titleCancel: 'Cancel', titleFailed: (e) => `Failed: ${e}`,
+        resumeOpenBtn: 'Resume this conversation in Terminal', resumeOpened: (c) => `Opened Terminal: ${c}`,
+        resumeBtn: 'Copy the command to resume this conversation', resumeNone: 'There is no resume command for this conversation', resumeCopied: (c) => `Copied: ${c}`, resumeFailed: (e) => `Failed: ${e}`,
         exportBtn: 'Copy this topic as Markdown', exportHeading: 'Copy this topic as Markdown',
         exportScope: 'Writes out this topic (a stretch of the conversation, split where there was a gap of 30 minutes or more and so on): your messages and the AI\'s, plus the commands that were run and the files that were touched. Tool output and the AI\'s reasoning are not saved, so they are not included.',
         exportMask: 'Mask anything that looks like a secret (recommended)', exportMaskNote: 'Masks API keys, tokens, passwords and the like. It is the same processing used before sending to a server, and “Always mask” words apply too.',
@@ -654,7 +658,7 @@
       const long = e.content.length > PREVIEW_CHARS;
       const open = long && expanded.has(index);
       const more = long ? `<button class="more" type="button" data-more="${index}">${t(open ? 'collapse' : 'expand')}</button>` : '';
-      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
+      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>${(e.source_tool === 'claude_code' || e.source_tool === 'codex' || e.source_tool === 'gemini_cli') ? `<button class="title-edit export-btn" type="button" data-resume-open-event="${e.event_id}" title="${t('resumeOpenBtn')}" aria-label="${t('resumeOpenBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="7 4 19 12 7 20 7 4"/></svg></button><button class="title-edit export-btn" type="button" data-resume-event="${e.event_id}" title="${t('resumeBtn')}" aria-label="${t('resumeBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ''}</div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
     }
     // ---- 題名の編集 ----
     let editingEvent = null;
@@ -736,8 +740,60 @@
       catch (_) { $('export-preview').select(); document.execCommand('copy'); }
       $('export-status').textContent = t('exportCopied');
     });
+    // ---- 会話を再開するコマンドをコピー(コマンドは Rust が作る。実行はしない) ----
+    async function copyText(text) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) {
+        const box = document.createElement('textarea');
+        box.value = text;
+        document.body.appendChild(box);
+        box.select();
+        document.execCommand('copy');
+        box.remove();
+      }
+    }
+    // ボタンの見た目を、しばらくだけ変えて、結果を知らせる(ふだんは、マウスを置いたときだけ見えるボタン)
+    function flashButton(button, mark, title) {
+      const html = button.innerHTML;
+      const previous = button.title;
+      button.textContent = mark;
+      button.title = title;
+      button.style.opacity = '1';
+      setTimeout(() => { button.innerHTML = html; button.title = previous; button.style.opacity = ''; }, 2000);
+    }
+    async function copyResumeCommand(button) {
+      try {
+        const command = await invoke('resume_command', { eventId: Number(button.dataset.resumeEvent) });
+        if (!command) return flashButton(button, '✕', t('resumeNone'));
+        await copyText(command);
+        flashButton(button, '✓', t('resumeCopied', command));
+      } catch (error) {
+        flashButton(button, '✕', t('resumeFailed', error));
+      }
+    }
+    // 新しいターミナルの窓で、その会話を再開する(クリップボードを使わない。コマンドは Rust が作って、ターミナルに開かせる)
+    async function openResumeInTerminal(button) {
+      try {
+        const command = await invoke('resume_open', { eventId: Number(button.dataset.resumeOpenEvent) });
+        flashButton(button, '✓', t('resumeOpened', command));
+      } catch (error) {
+        flashButton(button, '✕', t('resumeFailed', error));
+      }
+    }
     // 長い本文の「全文を表示 / 折りたたむ」(一覧を組み直さず、その1件だけ差し替える)
     $('timeline').addEventListener('click', (event) => {
+      const opener = event.target.closest?.('[data-resume-open-event]');
+      if (opener) {
+        event.stopPropagation();
+        openResumeInTerminal(opener);
+        return;
+      }
+      const resume = event.target.closest?.('[data-resume-event]');
+      if (resume) {
+        event.stopPropagation();
+        copyResumeCommand(resume);
+        return;
+      }
       const copy = event.target.closest?.('[data-export-event]');
       if (copy) {
         event.stopPropagation();

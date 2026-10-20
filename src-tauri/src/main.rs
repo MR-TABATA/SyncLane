@@ -81,6 +81,20 @@ fn export_section(
     synclane::export::section_markdown(&conn, event_id, &options).map_err(|e| format!("{e:#}"))
 }
 
+/// その発言の会話を、元のツール(Claude Code・Codex)で再開するコマンド。対応していない会話は None。コマンドを返すだけで、実行はしない。
+#[tauri::command]
+fn resume_command(event_id: i64, state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::resume::command(&conn, event_id).map_err(|e| format!("{e:#}"))
+}
+
+/// その発言の会話を、新しいターミナルの窓で再開する(macOS)。実行したコマンドを返す。
+#[tauri::command]
+fn resume_open(event_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::resume::open_in_terminal(&conn, event_id).map_err(|e| format!("{e:#}"))
+}
+
 /// 指した発言が属する区切りに、題名を付ける。空なら、区切りの題名を外す(会話全体の題名に戻る)。
 /// 付けた題名を返す(外したときは、空の文字列)。
 #[tauri::command]
@@ -314,7 +328,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             status, timeline, mcp_executable, open_search_window, close_search_window,
-            section_title_suggest, section_title_set, export_section,
+            section_title_suggest, section_title_set, export_section, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set
