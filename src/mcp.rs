@@ -101,7 +101,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "search_conversations",
-            "description": "ユーザーが過去に AI と交わした会話を、キーワードと日付で検索する。結果は新しい順で、本文は抜粋。\
+            "description": "ユーザーが過去に AI と交わした会話を、キーワードと日付で検索する。本文は抜粋。結果の並びは sort で選べる(手元の会話だけを探すときの既定は、関連度の高い順。サーバーの結果を含むときの既定は、新しい順)。\
                 ユーザー自身のプロジェクト名・製品名・過去の判断や経緯を聞かれたときは、ウェブ検索より先にこれを使う。\
                 query はスペース区切りで、すべてを含む会話だけが返る(AND)。見つからないときは、言い換えや別の言葉で何度か試すこと。\
                 結果の session_id と event_id を get_session に渡すと、その前後の会話を読める。",
@@ -112,6 +112,7 @@ fn tools() -> Value {
                     "date_from": { "type": "string", "description": "この日付以降(YYYY-MM-DD、UTC、この日を含む)。" },
                     "date_to": { "type": "string", "description": "この日付まで(YYYY-MM-DD、UTC、この日を含む)。" },
                     "limit": { "type": "integer", "description": format!("返す件数(既定 {DEFAULT_LIMIT}、最大 {MAX_LIMIT})。") },
+                    "sort": { "type": "string", "enum": ["relevance", "newest"], "description": "並べ方。relevance=関連度の高い順(古い発言も、件数の上限で落ちにくい。3 文字以上の語があるときだけ。無ければ新しい順)、newest=新しい順。手元の会話だけを探すときの既定は relevance、サーバーの結果を含むときの既定は newest。relevance にしても、サーバーの結果には点数が無いので、手元の結果のあとに、新しい順で並ぶ。" },
                     "scope": { "type": "string", "enum": ["local", "team", "all"], "description": "探す範囲。local=手元の自分の会話だけ、team=サーバーの会話(同僚の会話を含む)、all=両方。サーバーに接続していれば既定は all、していなければ local。" }
                 }
             }
@@ -247,14 +248,24 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
     let to = optional_date(args, "date_to")?;
     let limit = args.get("limit").and_then(Value::as_u64).map(|n| n as usize).unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let scope = parse_scope(args, remote, true)?;
+    // 既定: 手元の会話だけなら関連度順、サーバーの結果を含むなら新しい順(サーバーの結果には点数が無く、混ぜて並べられないため)
+    let order = match args.get("sort").and_then(Value::as_str) {
+        Some("relevance") => db::SearchOrder::Relevance,
+        Some("newest") => db::SearchOrder::Newest,
+        None if scope == Scope::Local => db::SearchOrder::Relevance,
+        None => db::SearchOrder::Newest,
+        Some(other) => return Err(format!("sort は relevance か newest です(受け取った値: {other})")),
+    };
     // date_to は「その日を含む」で受け、手元の DB には翌日の0時(含まない)として渡す。サーバーには、そのまま渡す(サーバーも「含む」)
     let to_exclusive = to.as_deref().map(next_day).transpose()?;
     let terms: Vec<&str> = query.map(|q| q.split_whitespace().collect()).unwrap_or_default();
 
     let mut rows: Vec<Row> = Vec::new();
     let mut keys: HashMap<(String, String), usize> = HashMap::new();
+    let mut ranked = false;
     if scope != Scope::Team {
-        let events = db::timeline_range(conn, from.as_deref(), to_exclusive.as_deref(), query, limit).map_err(|e| e.to_string())?;
+        ranked = order == db::SearchOrder::Relevance && db::can_rank(query);
+        let events = db::timeline_range_ordered(conn, from.as_deref(), to_exclusive.as_deref(), query, limit, order).map_err(|e| e.to_string())?;
         for e in &events {
             keys.insert((e.source_tool.clone(), e.source_event_id.clone()), rows.len());
             rows.push(local_row(e, excerpt(&e.content, &terms, EXCERPT_CHARS), false));
@@ -284,7 +295,10 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
             },
         }
     }
-    rows.sort_by(|a, b| time_key(b).cmp(&time_key(a)));
+    // 関連度順のときは、手元の結果の並び(点数順)を崩さない。サーバーだけにある発言は、そのあとに新しい順で並んでいる
+    if !ranked {
+        rows.sort_by(|a, b| time_key(b).cmp(&time_key(a)));
+    }
     rows.truncate(limit);
 
     let note = team_note.map(|m| format!("\n[サーバーの結果は含まれません: {m}]")).unwrap_or_default();
@@ -292,7 +306,14 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
         return Ok(format!("{NOTICE}\n\n該当する記録はありません。言い換えや別のキーワードで試してください。{note}"));
     }
     let show_origin = scope != Scope::Local;
-    let mut out = format!("{NOTICE}\n\n{}件(新しい順。時刻は UTC)\n", rows.len());
+    let order_label = if !ranked {
+        "新しい順"
+    } else if scope == Scope::Local {
+        "関連度の高い順"
+    } else {
+        "手元の結果は関連度の高い順、そのあとにサーバーだけの結果が新しい順"
+    };
+    let mut out = format!("{NOTICE}\n\n{}件({order_label}。時刻は UTC)\n", rows.len());
     for (i, row) in rows.iter().enumerate() {
         out.push_str(&format!("\n[{}] {}\n{}\n", i + 1, header(row, show_origin), row.text));
     }
@@ -441,6 +462,59 @@ mod tests {
         assert!(none["content"][0]["text"].as_str().unwrap().contains("該当する記録はありません"));
         let bad = call(&conn, "search_conversations", json!({ "date_from": "2026/10/13" }));
         assert_eq!(bad["isError"], true);
+    }
+
+    fn conn_for_ranking() -> Connection {
+        let conn = db::open_memory().unwrap();
+        conn.execute("INSERT INTO sessions(source_tool, project_path, title) VALUES ('claude_code', '/p', '調べもの')", []).unwrap();
+        let filler = "今日は天気がよくて散歩に出かけた。帰りに買い物をして、夕飯の献立を考えた。".repeat(8);
+        for (i, (content, at)) in [
+            ("古い記録: SQLite の索引は SQLite に任せる。SQLite の検索順位は bm25。", "2026-09-01T01:00:00Z".to_string()),
+            (&format!("{filler} SQLite {filler}"), "2026-10-05T01:00:00Z".to_string()),
+        ].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (1, 'claude_code', ?1, ?2, 'user', ?3, ?4)",
+                rusqlite::params![format!("k{i}"), at, content, i as i64],
+            ).unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn local_search_ranks_by_relevance_by_default_and_sort_newest_restores_the_old_order() {
+        let conn = conn_for_ranking();
+        // 既定(手元だけ): 古くても関連の高い発言が先頭。上限 1 件でも落ちない
+        let top = text(&call(&conn, "search_conversations", json!({ "query": "SQLite", "limit": 1 })));
+        assert!(top.contains("関連度の高い順") && top.contains("古い記録"), "{top}");
+        // sort=newest: 新しい順(長い発言が先頭)
+        let newest = text(&call(&conn, "search_conversations", json!({ "query": "SQLite", "limit": 1, "sort": "newest" })));
+        assert!(newest.contains("新しい順") && !newest.contains("古い記録"), "{newest}");
+        // 短い語(1〜2 文字)も、本文に出る回数で点数が付く
+        let short = text(&call(&conn, "search_conversations", json!({ "query": "の" })));
+        assert!(short.contains("関連度の高い順"), "{short}");
+        // 検索語が無い(日付だけ)ときも、新しい順
+        let dates = text(&call(&conn, "search_conversations", json!({ "date_from": "2026-09-01" })));
+        assert!(dates.contains("新しい順"), "{dates}");
+        // 不正な値は、エラー
+        let bad = call(&conn, "search_conversations", json!({ "query": "SQLite", "sort": "random" }));
+        assert_eq!(bad["isError"], true);
+    }
+
+    #[test]
+    fn with_a_server_the_default_stays_newest_and_relevance_puts_local_hits_first() {
+        let conn = conn_for_ranking();
+        let item = || team_item(901, "x1", "2026-10-15T09:00:00Z", "同僚の SQLite の発言", "田中", false);
+        // 既定(サーバーを含む): これまでどおり新しい順(同僚の新しい発言が先頭)
+        let t = FakeTransport::new(vec![ok(json!({"items": [item()]}))]);
+        let remote = Remote::new("https://s.example.com", "search-token", &t);
+        let out = text(&call_with(&conn, Some(&remote), "search_conversations", json!({ "query": "SQLite" })));
+        assert!(out.contains("新しい順") && out.find("同僚の SQLite の発言").unwrap() < out.find("古い記録").unwrap(), "{out}");
+        // sort=relevance: 手元の点数順のあとに、サーバーだけの発言
+        let t = FakeTransport::new(vec![ok(json!({"items": [item()]}))]);
+        let remote = Remote::new("https://s.example.com", "search-token", &t);
+        let out = text(&call_with(&conn, Some(&remote), "search_conversations", json!({ "query": "SQLite", "sort": "relevance" })));
+        assert!(out.contains("サーバーだけの結果が新しい順"), "{out}");
+        assert!(out.find("古い記録").unwrap() < out.find("同僚の SQLite の発言").unwrap(), "{out}");
     }
 
     #[test]

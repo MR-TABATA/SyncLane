@@ -368,7 +368,52 @@ pub fn timeline_range(
     query: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
-    search_events(conn, date_from, date_to, query, limit, has_search_index(conn))
+    timeline_range_ordered(conn, date_from, date_to, query, limit, SearchOrder::Newest)
+}
+
+/// 検索結果の並べ方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchOrder {
+    /// 新しい順。
+    Newest,
+    /// 関連度の高い順(語が本文に出る回数と、発言の長さから付けた点数)。同じ点数なら新しい順。索引は使わないので、短い語でも効く。
+    /// 検索語が無い(日付だけ)ときは、点数が付けられないので、新しい順と同じになる。
+    Relevance,
+}
+
+pub fn timeline_range_ordered(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    order: SearchOrder,
+) -> Result<Vec<TimelineEvent>> {
+    search_events_by(conn, date_from, date_to, query, limit, has_search_index(conn), order)
+}
+
+/// この検索語に、関連度の点数を付けられるか(検索語がある)。検索語が無い(日付だけ)ときは、関連度順を頼んでも、新しい順になる。
+pub fn can_rank(query: Option<&str>) -> bool {
+    query.unwrap_or_default().split_whitespace().next().is_some()
+}
+
+/// 関連度の点数の式(SQL)。語ごとに、本文に出る回数 tf を数えて、`tf / (tf + k × 長さの割り引き)` を足す(bm25 の式から、語の珍しさ(idf)を除いたもの)。
+/// - 回数は、本文から直接数える(語を取り除いた分の長さ ÷ 語の長さ)。索引を使わないので、1〜2 文字の語でも付く。
+/// - 検索は、すべての語を含む発言(AND)に絞るので、語の珍しさで重みを変えなくてよい。珍しさを測るには、語ごとに全体を数える必要があり、検索が倍かかる。
+/// - 長い発言は、1 回出ても、点数が低くなる。語は、`?` で 2 回ずつ(`tf` が式に 2 回出る)。
+fn score_sql(terms: &[&str]) -> String {
+    const K: f64 = 1.2;
+    const AVG_CHARS: f64 = 800.0; // 発言の長さの目安(割り引きの基準。全体の平均を測ると、全体を読むことになるので、決め打ち)
+    let shrink = format!("(0.25 + 0.75 * LENGTH(e.content) / {AVG_CHARS:.1})");
+    terms
+        .iter()
+        .map(|term| {
+            let n = term.chars().count();
+            let tf = format!("((LENGTH(e.content) - LENGTH(REPLACE(LOWER(e.content), LOWER(?), ''))) / {n}.0)");
+            format!("({tf} / ({tf} + {K:.1} * {shrink}))")
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 /// 語が、索引で探せるか(3 文字以上)。短い語は、本文を直接探す。
@@ -382,6 +427,7 @@ fn fts_phrase(term: &str) -> String {
 }
 
 /// 検索の本体。`indexed` が true なら、3 文字以上の語を、全文検索の索引で探す。false なら、すべて本文を直接探す(索引が無いとき・比較の試験用)。
+#[cfg(test)]
 fn search_events(
     conn: &Connection,
     date_from: Option<&str>,
@@ -390,16 +436,31 @@ fn search_events(
     limit: usize,
     indexed: bool,
 ) -> Result<Vec<TimelineEvent>> {
-    let mut sql = String::from(
-        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
-         FROM events e
-         JOIN sessions s ON s.id = e.session_id",
-    );
+    search_events_by(conn, date_from, date_to, query, limit, indexed, SearchOrder::Newest)
+}
+
+fn search_events_by(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    indexed: bool,
+    order: SearchOrder,
+) -> Result<Vec<TimelineEvent>> {
     let terms: Vec<&str> = query
         .unwrap_or_default()
         .split_whitespace()
         .filter(|term| !term.is_empty())
         .collect();
+    // 関連度順は、語が本文に出る回数で点数を付ける(索引に頼らないので、2 文字の語でも付く)。検索語があるときだけ。
+    // 題名・プロジェクトにだけ当たった発言は、本文に出る回数が 0 なので、点数 0 で、点数の付いた発言のあとに並ぶ。
+    let ranked = order == SearchOrder::Relevance && !terms.is_empty();
+    let mut sql = String::from(
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
+         FROM events e
+         JOIN sessions s ON s.id = e.session_id",
+    );
     let mut conditions: Vec<String> = Vec::new();
     if date_from.is_some() {
         conditions.push("e.occurred_at >= ?".to_owned());
@@ -422,7 +483,11 @@ fn search_events(
         sql.push_str(" WHERE ");
         sql.push_str(&conditions.join(" AND "));
     }
-    sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC LIMIT ?");
+    if ranked {
+        sql.push_str(&format!(" ORDER BY {} DESC, e.occurred_at DESC, e.sequence DESC LIMIT ?", score_sql(&terms)));
+    } else {
+        sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC LIMIT ?");
+    }
 
     let mut stmt = conn.prepare(&sql)?;
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -436,6 +501,13 @@ fn search_events(
         values.push(Box::new(if indexed && indexable(term) { fts_phrase(term) } else { (*term).to_owned() }));
         values.push(Box::new((*term).to_owned()));
         values.push(Box::new((*term).to_owned()));
+    }
+    // 点数の式は ORDER BY にあり、SQL の中で WHERE のあと。語ごとに 2 回(出現回数の式が 2 回出る)入れる
+    if ranked {
+        for term in &terms {
+            values.push(Box::new((*term).to_owned()));
+            values.push(Box::new((*term).to_owned()));
+        }
     }
     values.push(Box::new(limit as i64));
     let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_timeline_event)?;
@@ -619,6 +691,122 @@ mod tests {
         Ok(())
     }
 
+    fn relevance_corpus(conn: &Connection) {
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('claude-code', '/work/a', 'a', 'a', NULL)", []).unwrap();
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('claude-code', '/work/b', 'b', 'b', 'SQLite の調べもの')", []).unwrap();
+        let filler = "今日は天気がよくて散歩に出かけた。帰りに買い物をして、夕飯の献立を考え、洗濯物を取り込み、明日の予定を確認した。".repeat(6);
+        let rows = [
+            // 古いが、検索語が何度も出る短い発言(いちばん関連が高い)
+            (1, "2026-09-01T01:00:00.000Z", "SQLite の検索順位は bm25 で付ける。SQLite の索引は SQLite に任せる"),
+            // 新しいが、長い文章の中に 1 回だけ出る発言(関連が低い)
+            (1, "2026-10-05T01:00:00.000Z", &format!("{filler} SQLite {filler}")),
+            // 中くらい
+            (1, "2026-09-20T01:00:00.000Z", "SQLite を使う。ほかの話題も少し。"),
+            // 検索語は、題名にだけ当たる(本文には無い)。点数が付かないので、最後
+            (2, "2026-10-06T01:00:00.000Z", "別の話をしている"),
+        ];
+        for (i, (session, at, content)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', ?2, ?3, 'user', ?4, ?5)",
+                params![session, format!("r{i}"), at, content, i as i64],
+            ).unwrap();
+        }
+    }
+
+    fn texts(events: &[TimelineEvent]) -> Vec<&str> {
+        events.iter().map(|e| e.source_event_id.as_str()).collect()
+    }
+
+    #[test]
+    fn relevance_order_puts_the_best_match_first_even_if_it_is_old() -> Result<()> {
+        let conn = open_memory()?;
+        relevance_corpus(&conn);
+        let newest = timeline_range_ordered(&conn, None, None, Some("SQLite"), 10, SearchOrder::Newest)?;
+        let relevant = timeline_range_ordered(&conn, None, None, Some("SQLite"), 10, SearchOrder::Relevance)?;
+        // 新しい順: 題名にだけ当たる発言(r3)、長い発言(r1)、中くらい(r2)、古くて短い発言(r0)
+        assert_eq!(texts(&newest), ["r3", "r1", "r2", "r0"]);
+        // 関連度順: 古くて短い発言が先頭。題名にだけ当たる発言(点数なし)は、最後
+        assert_eq!(relevant.first().map(|e| e.source_event_id.as_str()), Some("r0"));
+        assert_eq!(relevant.last().map(|e| e.source_event_id.as_str()), Some("r3"));
+        // 件数の上限で切っても、いちばん関連の高い発言は、落ちない(新しい順だと、落ちる)
+        let top = timeline_range_ordered(&conn, None, None, Some("SQLite"), 1, SearchOrder::Relevance)?;
+        assert_eq!(texts(&top), ["r0"]);
+        let newest_top = timeline_range_ordered(&conn, None, None, Some("SQLite"), 1, SearchOrder::Newest)?;
+        assert_eq!(texts(&newest_top), ["r3"]);
+        Ok(())
+    }
+
+    #[test]
+    fn relevance_order_returns_the_same_set_as_newest() -> Result<()> {
+        let conn = open_memory()?;
+        corpus(&conn);
+        relevance_corpus(&conn);
+        for query in ["京都", "SQLite", "sqlite 日本語", "SyncLane sqlite", "京都 清水寺", "存在しない語", "AB", "AB sqlite", "\"hello", "-", ""] {
+            let mut a = ids(timeline_range_ordered(&conn, None, None, Some(query), 50, SearchOrder::Newest)?);
+            let mut b = ids(timeline_range_ordered(&conn, None, None, Some(query), 50, SearchOrder::Relevance)?);
+            a.sort();
+            b.sort();
+            assert_eq!(a, b, "検索語 {query:?} で、並べ方を変えたら、結果の集合が変わった");
+        }
+        // 日付で絞っても同じ
+        let a = ids(timeline_range_ordered(&conn, Some("2026-09-10"), Some("2026-10-02"), Some("SQLite"), 50, SearchOrder::Newest)?).len();
+        let b = ids(timeline_range_ordered(&conn, Some("2026-09-10"), Some("2026-10-02"), Some("SQLite"), 50, SearchOrder::Relevance)?).len();
+        assert_eq!(a, b);
+        Ok(())
+    }
+
+    #[test]
+    fn two_character_japanese_terms_are_ranked_too() -> Result<()> {
+        let conn = open_memory()?;
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('claude-code', '/work/a', 'a', 'a', NULL)", [])?;
+        let filler = "今日は天気がよくて散歩に出かけた。帰りに買い物をして、夕飯の献立を考え、洗濯物を取り込んだ。".repeat(8);
+        let rows = [
+            ("n0", "2026-09-01T01:00:00.000Z", "嵐山の竹林は朝がいい。嵐山は早く行くと空いている。".to_string()), // 古くて短く、2 回
+            ("n1", "2026-10-05T01:00:00.000Z", format!("{filler} 嵐山 {filler}")),                                // 新しくて長く、1 回
+            ("n2", "2026-09-20T01:00:00.000Z", "来週は京都に行く。".to_string()),                                   // 語を含まない
+        ];
+        for (i, (id, at, content)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (1, 'x', ?1, ?2, 'user', ?3, ?4)",
+                params![id, at, content, i as i64],
+            )?;
+        }
+        // 2 文字の語は索引の外。それでも、回数と長さで並ぶ(新しい順なら n1 が先頭、関連度順なら n0)
+        let newest = timeline_range_ordered(&conn, None, None, Some("嵐山"), 10, SearchOrder::Newest)?;
+        let relevant = timeline_range_ordered(&conn, None, None, Some("嵐山"), 10, SearchOrder::Relevance)?;
+        assert_eq!(texts(&newest), ["n1", "n0"]);
+        assert_eq!(texts(&relevant), ["n0", "n1"]);
+        assert_eq!(texts(&timeline_range_ordered(&conn, None, None, Some("嵐山"), 1, SearchOrder::Relevance)?), ["n0"]);
+        // 1 文字の語でも、落ちずに動く(結果の集合は、新しい順と同じ)
+        let mut a = ids(timeline_range_ordered(&conn, None, None, Some("の"), 10, SearchOrder::Newest)?);
+        let mut b = ids(timeline_range_ordered(&conn, None, None, Some("の"), 10, SearchOrder::Relevance)?);
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        assert!(!a.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn relevance_needs_a_search_term_and_does_not_need_the_index() -> Result<()> {
+        let conn = open_memory()?;
+        relevance_corpus(&conn);
+        // 検索語なし(日付だけ)は、新しい順と同じ
+        let all_newest = timeline_range_ordered(&conn, None, None, None, 10, SearchOrder::Newest)?;
+        let all_relevance = timeline_range_ordered(&conn, None, None, None, 10, SearchOrder::Relevance)?;
+        assert_eq!(texts(&all_newest), texts(&all_relevance));
+        assert!(!can_rank(None) && !can_rank(Some("  ")) && can_rank(Some("の")));
+        // 索引を使わない道でも、同じ先頭(点数は、索引に頼らない)
+        let direct = search_events_by(&conn, None, None, Some("SQLite"), 10, false, SearchOrder::Relevance)?;
+        let indexed = search_events_by(&conn, None, None, Some("SQLite"), 10, true, SearchOrder::Relevance)?;
+        assert_eq!(texts(&direct), texts(&indexed));
+        assert_eq!(direct.first().map(|e| e.source_event_id.as_str()), Some("r0"));
+        // 2 つの語: 両方が本文に何度も出る発言が先頭
+        let two = timeline_range_ordered(&conn, None, None, Some("SQLite 検索順位"), 10, SearchOrder::Relevance)?;
+        assert_eq!(two.first().map(|e| e.source_event_id.as_str()), Some("r0"));
+        Ok(())
+    }
+
     fn file_db(name: &str) -> PathBuf {
         // /tmp は使わない。プロジェクトの target/ の中に作って、終わったら消す
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("test-fts-{name}-{}", std::process::id()));
@@ -678,6 +866,47 @@ mod tests {
     }
 
     /// 速さの比較(`cargo test --lib bench -- --ignored --nocapture`)。実行のたびに、時間を表示するだけで、合否は決めない。
+    /// 関連度順(本文から回数を数える点数)の、新しい順に対する遅さを測る。`cargo test --release --lib bench_relevance -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_relevance_order_against_newest() -> Result<()> {
+        let path = file_db("bench-rel");
+        let conn = open(&path)?;
+        for session in 0..40 {
+            conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude-code', '/w', ?1, ?1)", [format!("s{session}")])?;
+        }
+        let words = ["京都", "旅行", "家計簿", "検索", "設計", "実装", "確認", "公開", "リリース", "署名", "公証", "題名", "区切り", "会話", "取り込み"];
+        let tx = conn.unchecked_transaction()?;
+        for i in 0..20_000 {
+            let mut body = String::new();
+            for k in 0..120 {
+                body.push_str(words[(i * 7 + k * 3) % words.len()]);
+                body.push_str(if k % 9 == 0 { "。\n" } else { "、" });
+            }
+            body.push_str(&format!("固有の語{i:05}"));
+            tx.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?5, 'x', ?1, ?2, 'user', ?3, ?4)",
+                params![format!("b{i}"), format!("2026-10-{:02}T{:02}:{:02}:00.000Z", 1 + (i / 1440) % 28, (i / 60) % 24, i % 60), body, i as i64, 1 + (i % 40) as i64],
+            )?;
+        }
+        tx.commit()?;
+        let size: i64 = conn.query_row("SELECT SUM(LENGTH(content)) FROM events", [], |r| r.get(0))?;
+        println!("発言 20,000 件、本文の合計 {} MB", size / 1_000_000);
+        for query in ["固有の語12345", "リリース 取り込み", "リリース 題名 区切り", "公証 署名", "検索", "会"] {
+            let t = std::time::Instant::now();
+            let a = search_events_by(&conn, None, None, Some(query), 30, true, SearchOrder::Newest)?.len();
+            let newest = t.elapsed();
+            let t = std::time::Instant::now();
+            let b = search_events_by(&conn, None, None, Some(query), 30, true, SearchOrder::Relevance)?.len();
+            let relevance = t.elapsed();
+            println!("{query:<14} 新しい順 {newest:>10.1?} / 関連度順 {relevance:>10.1?} ({a} 件・{b} 件)");
+            assert_eq!(a, b);
+        }
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        Ok(())
+    }
+
     #[test]
     #[ignore]
     fn bench_indexed_search_against_the_direct_scan() -> Result<()> {

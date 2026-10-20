@@ -46,10 +46,12 @@ fn timeline(
     date_to: Option<String>,
     query: Option<String>,
     limit: usize,
+    sort: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<TimelineEvent>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::timeline_range(&conn, date_from.as_deref(), date_to.as_deref(), query.as_deref(), limit).map_err(|e| e.to_string())
+    let order = if sort.as_deref() == Some("relevance") { db::SearchOrder::Relevance } else { db::SearchOrder::Newest };
+    db::timeline_range_ordered(&conn, date_from.as_deref(), date_to.as_deref(), query.as_deref(), limit, order).map_err(|e| e.to_string())
 }
 
 /// 題名の提案(手元の規則)。指した発言が属する区切り(話題のまとまり)の、最近の発言から出す。外には何も送らない。

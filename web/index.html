@@ -192,6 +192,7 @@
       <div id="range-fields" class="date-range"><div class="field"><label for="range-from" data-i18n="from">開始</label><input id="range-from" type="date" /></div><div class="field"><label for="range-to" data-i18n="to">終了</label><input id="range-to" type="date" /></div></div>
       <div id="around-fields" class="around-range" hidden><div class="field"><label for="around-date" data-i18n="aroundDate">基準日</label><input id="around-date" type="date" /></div><div class="field"><label for="around-days" data-i18n="aroundDays">前後（日）</label><input id="around-days" type="number" min="0" max="365" value="5" /></div></div>
       <div class="field"><label for="query" data-i18n="keyword">キーワード（スペース区切りでAND検索）</label><input id="query" type="search" placeholder="例: SyncLane SQLite" data-i18n-placeholder="keywordExample" /></div>
+      <div class="field"><label for="sort" data-i18n="sortLabel">並び順</label><select id="sort"><option value="newest" data-i18n="sortNewest">新しい順</option><option value="relevance" data-i18n="sortRelevance">関連度順</option></select></div>
       <button id="refresh" class="primary" data-i18n="show">表示</button>
       <div class="search-nav"><button id="previous" type="button" disabled data-i18n="prev">前を検索</button><button id="next" type="button" disabled data-i18n="next">次を検索</button></div>
       </div>
@@ -296,7 +297,7 @@
     const I18N = {
       ja: {
         expand: '全文を表示', collapse: '折りたたむ', counts: (n, u, a) => `${n}件（あなた：${u}件　AI：${a}件）`, mcpIntro: 'Claude Code などの AI が、保存した過去の会話を検索できるようにします。AI に「前にどう決めたっけ」と聞くと、SyncLane から探して答えます。', mcpCommand: 'Claude Code に登録するコマンド', mcpDesktop: 'Claude アプリ（デスクトップ）の設定', mcpDesktopNote: '設定 → 開発者 → 「設定を編集」で開く claude_desktop_config.json に書き足し、Claude アプリを完全に終了して起動し直します。', mcpCopy: 'コピー', mcpCopied: 'コピーしました', mcpWarn: '登録すると、その AI は保存した全会話を読めるようになります。会話の中にパスワードやコードが含まれていないか、確認してから登録してください。通信は PC の中だけで、ネットワークには出ません。読み取り専用です。', mcpMove: 'アプリを別の場所に移したときは、登録し直してください。', roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
-        from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite',
+        from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite', sortLabel: '並び順', sortNewest: '新しい順', sortRelevance: '関連度順',
         show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
         updateAvail: (v) => `新しい版 ${v} があります`, updating: '更新しています…', updateFailed: (e) => `更新できませんでした: ${e}`,
@@ -315,7 +316,7 @@
       },
       en: {
         expand: 'Show all', collapse: 'Collapse', counts: (n, u, a) => `${n} events (You: ${u}  AI: ${a})`, mcpIntro: 'Lets AI tools such as Claude Code search the conversations you have saved. Ask the AI “how did we decide that?” and it looks in SyncLane.', mcpCommand: 'Command to register with Claude Code', mcpDesktop: 'Claude desktop app settings', mcpDesktopNote: 'Add this to claude_desktop_config.json (Settings → Developer → Edit Config), then quit the Claude app completely and reopen it.', mcpCopy: 'Copy', mcpCopied: 'Copied', mcpWarn: 'Once registered, that AI can read all of your saved conversations. Check that they contain no passwords or sensitive code first. Everything stays on this computer, and access is read-only.', mcpMove: 'If you move the app, register it again.', roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
-        from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite',
+        from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite', sortLabel: 'Sort', sortNewest: 'Newest first', sortRelevance: 'Most relevant',
         show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
         updateAvail: (v) => `Version ${v} is available`, updating: 'Updating…', updateFailed: (e) => `Update failed: ${e}`,
@@ -532,6 +533,7 @@
     const dayStart = (date) => new Date(`${date}T00:00:00`).toISOString();
 
     let searchResults = [];
+    let resultOrder = 'newest'; // いま表示している結果の並べ方(newest / relevance)
     let selectedResult = -1;
     let loaded = false;
     let expanded = new Set(); // 全文を開いている行(一覧を引き直したら閉じる)
@@ -580,7 +582,10 @@
       if (!isSearchWindow) showCounts().catch(() => {});
       const bySearch = isSearchWindow || searchActive;
       const dates = bySearch ? searchDates() : mainDates();
-      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query: bySearch ? ($('query').value || null) : null, limit: 100 });
+      const query = bySearch ? ($('query').value || null) : null;
+      // 関連度順は、キーワードがあるときだけ。日付だけの表示は、これまでどおり時刻順(あなた／AI の組で並べる)
+      resultOrder = query && $('sort').value === 'relevance' ? 'relevance' : 'newest';
+      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query, limit: 100, sort: resultOrder });
       searchResults = events;
       expanded = new Set();
       selectedResult = events.length ? 0 : -1;
@@ -594,7 +599,8 @@
       for (let i = 0; i < searchResults.length;) {
         const current = searchResults[i];
         const next = searchResults[i + 1];
-        if (current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
+        // 関連度順では、隣り合う発言は、続きの会話とは限らない。組にせず、1 件ずつ並べる
+        if (resultOrder !== 'relevance' && current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
           rows.push({ user: { e: next, index: i + 1 }, assistant: { e: current, index: i } });
           i += 2;
         } else if (current.role.toUpperCase() === 'USER') {
@@ -765,6 +771,7 @@
         aroundDate: $('around-date').value,
         aroundDays: $('around-days').value,
         query: $('query').value,
+        sort: $('sort').value,
         stamp: Date.now()
       }));
     }
@@ -778,6 +785,7 @@
       $('around-date').value = value.aroundDate || '';
       $('around-days').value = value.aroundDays || '5';
       $('query').value = value.query || '';
+      $('sort').value = value.sort === 'relevance' ? 'relevance' : 'newest';
       updateDateFields();
       searchActive = true;
       load().catch(() => {});
