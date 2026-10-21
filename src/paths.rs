@@ -78,6 +78,11 @@ pub fn gemini_tmp_dir() -> PathBuf {
     home_dir().unwrap_or_default().join(".gemini").join("tmp")
 }
 
+/// Antigravity CLI(`agy`)の会話(`~/.gemini/antigravity-cli`)。
+pub fn antigravity_cli_dir() -> PathBuf {
+    home_dir().unwrap_or_default().join(".gemini").join("antigravity-cli")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

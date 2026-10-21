@@ -348,6 +348,196 @@ fn gemini_message_content(value: &Value) -> Option<(String, &'static str, String
     (!text.is_empty()).then(|| (occurred_at, role, text.to_string()))
 }
 
+// ---- Antigravity CLI(`agy`) ----
+//
+// `~/.gemini/antigravity-cli/conversations/<会話 ID>.db`。会話ごとに 1 つの SQLite で、1 手ずつが `steps` の 1 行。
+// 中身は `step_payload`(Protocol Buffers。圧縮も暗号化もされていない)。取るのは次の 2 種類だけ(構造を調べて確かめた)。
+//   - `step_type` 14 = あなたの発言: 本文は `f19.f2`
+//   - `step_type` 15 = 回答: 本文は `f20.f1`(同じものが `f20.f8` にもある)
+//   - 時刻はどちらも `f5.f1`(`f1` = 秒、`f2` = ナノ秒)
+// ツールの実行(132)・履歴のまとめ(101)・思考は取らない(Claude Code の取り込みと同じ方針)。
+// IDE 版(`~/.gemini/antigravity/conversations/*.pb`)は、暗号化されているらしく、読めないので扱わない。
+
+const ANTIGRAVITY_TOOL: &str = "antigravity_cli";
+const ANTIGRAVITY_USER_STEP: i64 = 14;
+const ANTIGRAVITY_ANSWER_STEP: i64 = 15;
+const ANTIGRAVITY_STEP_DONE: i64 = 3;
+
+enum Pb<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+    Fixed,
+}
+
+fn pb_varint(bytes: &[u8], at: &mut usize) -> Option<u64> {
+    let (mut value, mut shift) = (0u64, 0u32);
+    loop {
+        let byte = *bytes.get(*at)?;
+        *at += 1;
+        value |= u64::from(byte & 0x7f).checked_shl(shift)?;
+        if byte < 0x80 { return Some(value); }
+        shift += 7;
+        if shift > 63 { return None; }
+    }
+}
+
+/// Protocol Buffers の 1 階層分を (フィールド番号, 値) に分ける。壊れていれば None。
+fn pb_parse(bytes: &[u8]) -> Option<Vec<(u64, Pb<'_>)>> {
+    let (mut at, mut out) = (0usize, Vec::new());
+    while at < bytes.len() {
+        let key = pb_varint(bytes, &mut at)?;
+        let value = match key & 7 {
+            0 => Pb::Varint(pb_varint(bytes, &mut at)?),
+            1 => { at = at.checked_add(8)?; Pb::Fixed }
+            2 => {
+                let len = usize::try_from(pb_varint(bytes, &mut at)?).ok()?;
+                let end = at.checked_add(len)?;
+                let slice = bytes.get(at..end)?;
+                at = end;
+                Pb::Bytes(slice)
+            }
+            5 => { at = at.checked_add(4)?; Pb::Fixed }
+            _ => return None,
+        };
+        if at > bytes.len() { return None; }
+        out.push((key >> 3, value));
+    }
+    Some(out)
+}
+
+/// `path` のとおりに入れ子をたどって、最後のフィールド(バイト列)を返す。
+fn pb_bytes<'a>(bytes: &'a [u8], path: &[u64]) -> Option<&'a [u8]> {
+    let mut current = bytes;
+    for number in path {
+        current = pb_parse(current)?.into_iter().find_map(|(field, value)| match value {
+            Pb::Bytes(slice) if field == *number => Some(slice),
+            _ => None,
+        })?;
+    }
+    Some(current)
+}
+
+fn pb_number(bytes: &[u8], number: u64) -> Option<u64> {
+    pb_parse(bytes)?.into_iter().find_map(|(field, value)| match value {
+        Pb::Varint(v) if field == number => Some(v),
+        _ => None,
+    })
+}
+
+/// `2026-10-21T00:41:20.123Z` の形(ほかの取り込みと同じ)。
+fn antigravity_time(payload: &[u8]) -> Option<String> {
+    let stamp = pb_bytes(payload, &[5, 1])?;
+    let seconds = i64::try_from(pb_number(stamp, 1)?).ok()?;
+    let millis = pb_number(stamp, 2).unwrap_or(0) / 1_000_000;
+    let at = time::OffsetDateTime::from_unix_timestamp(seconds).ok()?;
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        at.year(), u8::from(at.month()), at.day(), at.hour(), at.minute(), at.second(), millis.min(999)
+    ))
+}
+
+/// 1 手の記録から (時刻, 役割, 本文) を取り出す。発言でも回答でもなければ None。
+fn antigravity_step(step_type: i64, payload: &[u8]) -> Option<(String, &'static str, String)> {
+    let (role, text) = match step_type {
+        ANTIGRAVITY_USER_STEP => ("user", pb_bytes(payload, &[19, 2])),
+        ANTIGRAVITY_ANSWER_STEP => ("assistant", pb_bytes(payload, &[20, 1]).or_else(|| pb_bytes(payload, &[20, 8]))),
+        _ => return None,
+    };
+    let text = std::str::from_utf8(text?).ok()?.trim();
+    if text.is_empty() { return None; }
+    Some((antigravity_time(payload)?, role, text.to_string()))
+}
+
+/// 1 つの会話の DB を取り込む。発言の ID は `<会話 ID>:<手の番号>`。本文が変わっていれば更新する。
+fn import_antigravity_file(tx: &rusqlite::Transaction<'_>, path: &Path, report: &mut ImportReport) -> Result<bool> {
+    // Antigravity が書いている最中のことがある。読み取り専用で開く
+    let source = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    let session_key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+    let mut statement = source.prepare(
+        "SELECT idx, step_type, step_payload FROM steps WHERE status = ?1 AND step_type IN (?2, ?3) ORDER BY idx",
+    )?;
+    let mut rows = Vec::new();
+    let mut found = statement.query(params![ANTIGRAVITY_STEP_DONE, ANTIGRAVITY_USER_STEP, ANTIGRAVITY_ANSWER_STEP])?;
+    while let Some(row) = found.next()? {
+        let (idx, step_type): (i64, i64) = (row.get(0)?, row.get(1)?);
+        let payload: Vec<u8> = row.get(2)?;
+        match antigravity_step(step_type, &payload) {
+            Some((occurred_at, role, content)) => rows.push((format!("{session_key}:{idx}"), occurred_at, role, content, idx)),
+            None => report.skipped_lines += 1,
+        }
+    }
+    if rows.is_empty() { return Ok(false); }
+
+    let source_file = path.to_string_lossy().into_owned();
+    let (session_id, created) = find_or_create_session_for_tool(tx, ANTIGRAVITY_TOOL, &source_file, "Antigravity", &session_key)?;
+    if created { report.sessions += 1; }
+    for (event_id, occurred_at, role, content, sequence) in rows {
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![session_id, ANTIGRAVITY_TOOL, event_id, occurred_at, role, content, sequence],
+        )?;
+        report.events += inserted;
+        if inserted == 0 {
+            tx.execute(
+                "UPDATE events SET content = ?3, occurred_at = ?4 WHERE source_tool = ?1 AND source_event_id = ?2 AND content <> ?3",
+                params![ANTIGRAVITY_TOOL, event_id, content, occurred_at],
+            )?;
+        }
+    }
+    Ok(true)
+}
+
+/// 最後に書かれた時刻(ミリ秒)。SQLite は、書き込みが `-wal` に入ることがあるので、両方のうち新しいほう。
+fn antigravity_stamp(path: &Path) -> i64 {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    modified(path).max(modified(Path::new(&wal)))
+}
+
+/// Antigravity CLI の会話を、前回から書き換わったものだけ、SQLite へ取り込む(アプリが、一定の間隔で呼ぶ)。
+/// `root` は `~/.gemini/antigravity-cli`。書き換わりは、最後に書かれた時刻で見分ける(大きさは、書き換えても変わらないことがある)。
+pub fn collect_antigravity_incremental(root: &Path, conn: &mut Connection) -> Result<ImportReport> {
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(root.join("conversations")) {
+        Ok(entries) => entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "db")).collect(),
+        Err(_) => Vec::new(), // Antigravity CLI を使っていない
+    };
+    files.sort();
+    let tx = conn.transaction()?;
+    let mut report = ImportReport::default();
+    for path in files {
+        let stamp = antigravity_stamp(&path);
+        let saved_key = path.to_string_lossy().into_owned();
+        let saved: Option<i64> = tx
+            .query_row(
+                "SELECT byte_offset FROM collector_files WHERE source_tool = ?1 AND source_file = ?2",
+                params![ANTIGRAVITY_TOOL, saved_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if saved == Some(stamp) { continue; }
+        match import_antigravity_file(&tx, &path, &mut report) {
+            Ok(true) => report.files += 1,
+            Ok(false) => {}
+            Err(error) => {
+                // 1 つが読めなくても、ほかは続ける(時刻は覚えず、次回に、また試す)
+                eprintln!("synclane antigravity: {}: {error:#}", path.display());
+                continue;
+            }
+        }
+        tx.execute(
+            "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(source_tool, source_file) DO UPDATE SET byte_offset = excluded.byte_offset, updated_at = CURRENT_TIMESTAMP",
+            params![ANTIGRAVITY_TOOL, saved_key, stamp],
+        )?;
+    }
+    tx.commit()?;
+    Ok(report)
+}
+
 // ---- Codex(ChatGPT の Codex アプリ・Codex CLI) ----
 //
 // `~/.codex/sessions/<年>/<月>/<日>/rollout-<日時>-<ID>.jsonl`。1 行が `{timestamp, ordinal, type, payload}`。
@@ -1431,6 +1621,136 @@ mod tests {
         conn.execute("DELETE FROM settings WHERE key LIKE 'section_break:%'", [])?;
         assert_eq!(backfill_claude_breaks(&temp, &mut conn)?, 0);
         assert_eq!(breaks(&conn).len(), 0);
+        Ok(())
+    }
+
+    // ---- Antigravity CLI ----
+
+    fn pb_varint_bytes(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 { out.push(byte); return out; }
+            out.push(byte | 0x80);
+        }
+    }
+    fn pb_field_varint(number: u64, value: u64) -> Vec<u8> {
+        let mut out = pb_varint_bytes(number << 3);
+        out.extend(pb_varint_bytes(value));
+        out
+    }
+    fn pb_field_bytes(number: u64, bytes: &[u8]) -> Vec<u8> {
+        let mut out = pb_varint_bytes((number << 3) | 2);
+        out.extend(pb_varint_bytes(bytes.len() as u64));
+        out.extend(bytes);
+        out
+    }
+    /// 実際の記録と同じ形の 1 手: f1 = 種類、f4 = 状態、f5.f1 = 時刻、発言は f19.f2、回答は f20.f1。
+    fn antigravity_payload(step_type: u64, seconds: u64, text: &str) -> Vec<u8> {
+        let stamp = [pb_field_varint(1, seconds), pb_field_varint(2, 123_000_000)].concat();
+        let meta = pb_field_bytes(1, &stamp);
+        let body = match step_type {
+            14 => pb_field_bytes(19, &pb_field_bytes(2, text.as_bytes())),
+            15 => pb_field_bytes(20, &[pb_field_bytes(1, text.as_bytes()), pb_field_bytes(8, text.as_bytes())].concat()),
+            _ => pb_field_bytes(21, text.as_bytes()),
+        };
+        [pb_field_varint(1, step_type), pb_field_varint(4, 3), pb_field_bytes(5, &meta), body].concat()
+    }
+    fn antigravity_db(path: &Path, steps: &[(i64, i64, i64, Vec<u8>)]) {
+        let db = Connection::open(path).unwrap();
+        db.execute("CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, step_payload blob)", []).unwrap();
+        for (idx, step_type, status, payload) in steps {
+            db.execute("INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?1, ?2, ?3, ?4)", params![idx, step_type, status, payload]).unwrap();
+        }
+    }
+
+    #[test]
+    fn antigravity_cli_steps_are_read_as_questions_and_answers_and_nothing_else() -> Result<()> {
+        let temp = tempfile_dir();
+        let conversations = temp.join("conversations");
+        std::fs::create_dir_all(&conversations)?;
+        antigravity_db(&conversations.join("conv-1.db"), &[
+            (0, 14, 3, antigravity_payload(14, 1_792_543_280, "質問です")),
+            (1, 15, 3, antigravity_payload(15, 1_792_543_290, "回答です")),
+            (2, 132, 3, antigravity_payload(132, 1_792_543_291, "ツールの実行")), // 取らない
+            (3, 15, 1, antigravity_payload(15, 1_792_543_292, "書きかけ")),       // 完了していない
+            (4, 14, 3, antigravity_payload(14, 1_792_543_293, "   ")),            // 空
+        ]);
+        let mut conn = db::open_memory()?;
+        let report = collect_antigravity_incremental(&temp, &mut conn)?;
+        assert_eq!((report.files, report.sessions, report.events), (1, 1, 2));
+        let rows: Vec<(String, String, String, String)> = conn
+            .prepare("SELECT source_tool, role, content, occurred_at FROM events ORDER BY sequence")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        assert_eq!(rows[0], ("antigravity_cli".into(), "user".into(), "質問です".into(), "2026-10-21T00:41:20.123Z".into()));
+        assert_eq!(rows[1].1, "assistant");
+        assert_eq!(rows[1].2, "回答です");
+        let (project, key): (String, String) = conn.query_row("SELECT project_path, source_hash FROM sessions", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        assert_eq!((project.as_str(), key.as_str()), ("Antigravity", "conv-1"));
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn antigravity_cli_reads_again_only_what_was_written_and_completes_unfinished_answers() -> Result<()> {
+        let temp = tempfile_dir();
+        let conversations = temp.join("conversations");
+        std::fs::create_dir_all(&conversations)?;
+        let path = conversations.join("conv-2.db");
+        antigravity_db(&path, &[(0, 14, 3, antigravity_payload(14, 1_792_543_280, "質問"))]);
+        let mut conn = db::open_memory()?;
+        assert_eq!(collect_antigravity_incremental(&temp, &mut conn)?.events, 1);
+        // 変わっていなければ、読まない
+        let again = collect_antigravity_incremental(&temp, &mut conn)?;
+        assert_eq!((again.files, again.events), (0, 0));
+
+        // 書き足されたら、新しい分だけ増える(時刻は、ミリ秒の単位で見るので、少し待って書く)
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let db = Connection::open(&path)?;
+        db.execute("INSERT INTO steps (idx, step_type, status, step_payload) VALUES (1, 15, 3, ?1)", params![antigravity_payload(15, 1_792_543_290, "回答")])?;
+        drop(db);
+        let more = collect_antigravity_incremental(&temp, &mut conn)?;
+        assert_eq!((more.files, more.events), (1, 1));
+        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
+        assert_eq!(sessions, 1);
+
+        // 本文が書き換わったら、更新する(件数には数えない)
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let db = Connection::open(&path)?;
+        db.execute("UPDATE steps SET step_payload = ?1 WHERE idx = 1", params![antigravity_payload(15, 1_792_543_290, "回答の完成版")])?;
+        drop(db);
+        let fixed = collect_antigravity_incremental(&temp, &mut conn)?;
+        assert_eq!(fixed.events, 0);
+        let content: String = conn.query_row("SELECT content FROM events WHERE source_event_id = 'conv-2:1'", [], |r| r.get(0))?;
+        assert_eq!(content, "回答の完成版");
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn antigravity_cli_collection_copes_with_a_missing_folder_a_broken_file_and_broken_payloads() -> Result<()> {
+        let mut conn = db::open_memory()?;
+        let nowhere = std::env::temp_dir().join("synclane-no-such-antigravity-dir");
+        assert_eq!(collect_antigravity_incremental(&nowhere, &mut conn)?, ImportReport::default());
+
+        let temp = tempfile_dir();
+        let conversations = temp.join("conversations");
+        std::fs::create_dir_all(&conversations)?;
+        std::fs::write(conversations.join("broken.db"), b"this is not sqlite")?; // 読めないファイル
+        antigravity_db(&conversations.join("odd.db"), &[
+            (0, 14, 3, vec![0x08, 0x0E, 0xFF]),                       // 壊れた protobuf
+            (1, 15, 3, pb_field_bytes(20, &pb_field_bytes(1, &[0xFF, 0xFE]))), // UTF-8 でない
+            (2, 14, 3, antigravity_payload(14, 1_792_543_280, "読める質問")),
+        ]);
+        let report = collect_antigravity_incremental(&temp, &mut conn)?;
+        assert_eq!(report.events, 1);
+        assert_eq!(report.skipped_lines, 2);
+        // 読めなかったファイルは、時刻を覚えない(次回にまた試す)
+        let saved: i64 = conn.query_row("SELECT COUNT(*) FROM collector_files WHERE source_tool = 'antigravity_cli'", [], |r| r.get(0))?;
+        assert_eq!(saved, 1);
+        std::fs::remove_dir_all(temp)?;
         Ok(())
     }
 }

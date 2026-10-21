@@ -829,7 +829,7 @@
     }
     // 保存される値は USER / ASSISTANT のまま。表示だけ言語に合わせる
     function roleLabel(role) { const r = role.toUpperCase(); return r === 'USER' ? t('roleUser') : r === 'ASSISTANT' ? t('roleAssistant') : role; }
-    function sourceLabel(source) { return ({ claude_code: 'Claude Code', gemini_cli: 'Gemini CLI', gemini_web: 'Gemini', chatgpt_web: 'ChatGPT', codex: 'Codex' }[source] || source); }
+    function sourceLabel(source) { return ({ claude_code: 'Claude Code', gemini_cli: 'Gemini CLI', antigravity_cli: 'Antigravity', gemini_web: 'Gemini', chatgpt_web: 'ChatGPT', codex: 'Codex' }[source] || source); }
     // Markdown を安全な HTML にする(先に全体をエスケープし、リンクは http(s) だけ許す)
     function inlineMd(raw) {
       const codes = [];

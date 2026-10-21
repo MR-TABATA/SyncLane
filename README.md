@@ -10,7 +10,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 
 ※画面は、作り話の会話です。
 
-- **AIとの会話が、1か所に集まる**: Claude Code・Codex・Gemini CLI は自動で集め、Web 版の Gemini・ChatGPT は Chrome 拡張で取り込みます。
+- **AIとの会話が、1か所に集まる**: Claude Code・Codex・Gemini CLI・Antigravity CLI は自動で集め、Web 版の Gemini・ChatGPT は Chrome 拡張で取り込みます。
 - **AIに、自分の過去を聞ける**: MCPサーバーとして動くので、「前にこの問題、どう解決したっけ?」とAIに聞けます(読み取り専用)。
 - **記録が、手元に残る**: 保存先は Mac の中の SQLite です。ツール側で履歴が見られなくなっても、残ります。**初期状態では、外のサーバーには何も送りません。**
 - **日本語も探せる**: 全文検索で、日本語は部分一致で探せます。
@@ -26,6 +26,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 | Codex(Codex アプリ・Codex CLI) | アプリ起動中、30秒ごとに自動(`~/.codex/sessions`) |
 | Gemini(ウェブ版)・ChatGPT(ウェブ版) | Chrome 拡張([手順](#geminichatgpt-の会話を取り込むchrome-拡張)) |
 | Gemini CLI | アプリ起動中、30秒ごとに自動(`~/.gemini/tmp`) |
+| Antigravity CLI(`agy`) | アプリ起動中、30秒ごとに自動(`~/.gemini/antigravity-cli`) |
 
 コマンド(CLI)は、**配布版(dmg)には入っていません**。ソースをビルドして使います(下の「開発」)。過去の会話を日付で取り込み直すときなどに使います。配布版のアプリは、画面と、AI から検索するための MCP(`--mcp`)だけです。
 
@@ -35,7 +36,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 
 [mrktools.app/ja/synclane/download/](https://mrktools.app/ja/synclane/download/) から、dmg をダウンロードして、`SyncLane.app` を `/Applications` に入れます。署名・公証済みで、新しい版は、アプリが自動で知らせます。
 
-アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)、Gemini CLI の新しい会話(`~/.gemini/tmp`)を取り込みます。
+アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)、Gemini CLI の新しい会話(`~/.gemini/tmp`)、Antigravity CLI の新しい会話(`~/.gemini/antigravity-cli`)を取り込みます。
 
 ## Gemini・ChatGPT の会話を取り込む(Chrome 拡張)
 
@@ -204,6 +205,13 @@ cargo run -- import gemini --all
 ```
 
 `--date` を省略しても全イベントが対象になるが、明示的に取り込む場合は `--all` を使う。`--date` と `--all` は同時に指定できない。取り込みは冪等で、同じログを再実行してもイベントは重複しない。
+
+### Antigravity CLIログの取り込み
+
+アプリは、`~/.gemini/antigravity-cli/conversations/*.db`(会話ごとに SQLite が 1 つ)を、30秒ごとに読みます。書き換わった会話だけを読み直し、読み取り専用で開くので、Antigravity の記録は書き換えません。保存するのは、あなたの発言と AI の回答だけです。ツールの実行・考え中の表示は保存しません。プロジェクトは、まだ取れないので、一律「Antigravity」と表示します。コマンドの `import` はありません(アプリの自動取り込みだけです)。
+
+- **IDE 版の Antigravity(`~/.gemini/antigravity/conversations/*.pb`)は、取り込めません。** 記録が暗号化されているらしく、読めないためです。CLI 版(`agy`)の会話が対象です。
+- 記録の形式は公開されていないので、実際の記録の構造から読み方を決めています。Antigravity の更新で形式が変わると、取り込めなくなることがあります。
 
 ### Codexログの取り込み
 

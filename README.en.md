@@ -10,7 +10,7 @@ SyncLane is a free, open-source Mac app that keeps your conversations with Claud
 
 *The screen shows made-up conversations.*
 
-- **One place for your AI conversations**: Claude Code, Codex and Gemini CLI are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
+- **One place for your AI conversations**: Claude Code, Codex, Gemini CLI and Antigravity CLI are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
 - **Ask your AI about your own past**: it works as an MCP server, so you can ask “How did we solve this before?” (read-only).
 - **Your record stays on your Mac**: it is stored in a local SQLite file, and stays even if a tool stops showing its history. **By default nothing is sent anywhere.**
 - **Japanese works too**: full-text search, with substring matching for Japanese.
@@ -26,6 +26,7 @@ Only if you connect to a SyncLane server (for example one your company runs) are
 | Codex (Codex app, Codex CLI) | Automatic every 30 seconds while the app runs (`~/.codex/sessions`) |
 | Gemini (web), ChatGPT (web) | Chrome extension ([how](#importing-gemini-and-chatgpt-conversations-chrome-extension)) |
 | Gemini CLI | Automatic every 30 seconds while the app runs (`~/.gemini/tmp`) |
+| Antigravity CLI (`agy`) | Automatic every 30 seconds while the app runs (`~/.gemini/antigravity-cli`) |
 
 The command (CLI) is **not included in the download (dmg)**. Build it from the source (see "Development" below). Use it, for example, to import past conversations again for a given date. The downloaded app only has the window and the MCP server (`--mcp`) your AI uses to search.
 
@@ -35,7 +36,7 @@ It saves your input and the AI's text replies. Tool output and the AI's reasonin
 
 Download the dmg from [mrktools.app/en/synclane/download/](https://mrktools.app/en/synclane/download/) and put `SyncLane.app` in `/Applications`. It is signed and notarized, and the app tells you when a new version is out.
 
-While the app is running, it imports new Claude Code conversations (`~/.claude/projects`), new Codex conversations (`~/.codex/sessions`) and new Gemini CLI conversations (`~/.gemini/tmp`) every 30 seconds.
+While the app is running, it imports new Claude Code conversations (`~/.claude/projects`), new Codex conversations (`~/.codex/sessions`), new Gemini CLI conversations (`~/.gemini/tmp`) and new Antigravity CLI conversations (`~/.gemini/antigravity-cli`) every 30 seconds.
 
 ## Importing Gemini and ChatGPT conversations (Chrome extension)
 
@@ -204,6 +205,13 @@ cargo run -- import gemini --all
 ```
 
 Omitting `--date` also targets every event, but use `--all` when you mean to import everything. `--date` and `--all` cannot be combined. Importing is idempotent: running it again on the same log does not duplicate events.
+
+### Importing Antigravity CLI logs
+
+The app reads `~/.gemini/antigravity-cli/conversations/*.db` (one SQLite file per conversation) every 30 seconds. Only conversations that were written to are read again, and the files are opened read-only, so Antigravity's records are never modified. Only your messages and the AI's replies are saved; tool runs and reasoning are not. The project cannot be determined yet, so every conversation shows as "Antigravity". There is no `import` command for it (the app's automatic import only).
+
+- **The IDE version of Antigravity (`~/.gemini/antigravity/conversations/*.pb`) is not imported.** Its records appear to be encrypted and cannot be read. Conversations from the CLI (`agy`) are covered.
+- The record format is not public, so the reading rules come from the structure of real records. If an Antigravity update changes the format, importing may stop working.
 
 ### Importing Codex logs
 

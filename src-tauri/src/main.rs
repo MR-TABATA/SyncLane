@@ -299,6 +299,7 @@ fn main() {
                 }
                 let codex_root = synclane::paths::codex_sessions_dir();
                 let gemini_root = synclane::paths::gemini_tmp_dir();
+                let antigravity_root = synclane::paths::antigravity_cli_dir();
                 // ツールの呼び出し(実行したコマンド・触ったファイル)を、すでに取り込んだ会話にも、さかのぼって保存する(1 度だけ)
                 if let Ok(mut conn) = collector_conn.lock() {
                     if let Err(error) = importer::backfill_tool_calls_claude(&root, &mut conn) {
@@ -330,6 +331,16 @@ fn main() {
                             }
                             Ok(_) => {}
                             Err(error) => eprintln!("synclane gemini: {error:#}"),
+                        }
+                    }
+                    // Antigravity CLI の会話。書き換わったものだけ、読み直す
+                    if let Ok(mut conn) = collector_conn.lock() {
+                        match importer::collect_antigravity_incremental(&antigravity_root, &mut conn) {
+                            Ok(report) if report.events > 0 => {
+                                let _ = handle.emit("events-updated", report.events);
+                            }
+                            Ok(_) => {}
+                            Err(error) => eprintln!("synclane antigravity: {error:#}"),
                         }
                     }
                     thread::sleep(Duration::from_secs(30));
