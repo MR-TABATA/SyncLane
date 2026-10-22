@@ -195,7 +195,7 @@ pub(crate) fn last_name(path: &str) -> &str {
 }
 
 /// 表示の名前。末尾の名前が、別の場所のプロジェクトと重なったときだけ、親のフォルダを足す(`親/名前`)。
-fn display_names(paths: &[&str]) -> HashMap<String, String> {
+pub(crate) fn display_names(paths: &[&str]) -> HashMap<String, String> {
     let mut count: HashMap<&str, usize> = HashMap::new();
     for path in paths {
         *count.entry(last_name(path)).or_default() += 1;

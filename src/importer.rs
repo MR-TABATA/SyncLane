@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::tools::{self, ToolCall};
+use crate::usage::{self, TokenUsage};
 
 const CLAUDE_TOOL: &str = "claude_code";
 const GEMINI_TOOL: &str = "gemini_cli";
@@ -68,6 +69,7 @@ fn collect_claude_file(
     let mut title: Option<String> = None;
     let mut breaks: Vec<String> = Vec::new();
     let mut calls: Vec<ToolCall> = Vec::new();
+    let mut usages: Vec<TokenUsage> = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             report.skipped_lines += 1;
@@ -76,6 +78,7 @@ fn collect_claude_file(
         if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(at) = compact_boundary(&value) { breaks.push(at); }
         calls.extend(tools::claude_calls(&value));
+        usages.extend(usage::claude_usage(&value));
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() { project_path = cwd.to_string(); }
         }
@@ -102,6 +105,7 @@ fn collect_claude_file(
         }
     }
     store_calls(tx, CLAUDE_TOOL, &source_file, &calls)?;
+    store_usages(tx, CLAUDE_TOOL, &source_file, &usages)?;
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     record_breaks(tx, &source_file, &breaks)?;
     if next_offset != saved_offset {
@@ -554,6 +558,8 @@ pub struct CodexParsed {
     pub rows: Vec<(String, String, &'static str, String, i64)>,
     /// ツールの呼び出し(実行したコマンド・変更したファイル・MCP の呼び出し)
     pub calls: Vec<ToolCall>,
+    /// トークン数(`token_count` の行。モデルは、直前の `turn_context` から)
+    pub usages: Vec<TokenUsage>,
     pub next_offset: u64,
     pub skipped_lines: usize,
 }
@@ -583,6 +589,8 @@ pub fn parse_codex_file(path: &Path, offset: u64, date: Option<&str>) -> Result<
     reader.seek(SeekFrom::Start(offset))?;
 
     let mut parsed = CodexParsed { next_offset: offset, ..Default::default() };
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex").to_string();
+    let mut model = String::new();
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -591,9 +599,9 @@ pub fn parse_codex_file(path: &Path, offset: u64, date: Option<&str>) -> Result<
             break;
         }
         parsed.next_offset += read as u64;
-        // 必要な行(session_meta と item_completed)だけを、JSON として読む(数百 MB を全部は解析しない)
+        // 必要な行(session_meta・item_completed・token_count・turn_context)だけを、JSON として読む(数百 MB を全部は解析しない)
         let wanted_meta = contains(&line, b"\"session_meta\"");
-        if !wanted_meta && !contains(&line, b"\"item_completed\"") {
+        if !wanted_meta && !contains(&line, b"\"item_completed\"") && !contains(&line, b"\"token_count\"") && !contains(&line, b"\"turn_context\"") {
             continue;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&line) else {
@@ -610,8 +618,19 @@ pub fn parse_codex_file(path: &Path, offset: u64, date: Option<&str>) -> Result<
                     parsed.session_key = Some(id.to_string());
                 }
             }
+            Some("turn_context") => {
+                if let Some(found) = usage::codex_model(&value) {
+                    model = found;
+                }
+            }
             Some("event_msg") => {
                 let Some(payload) = payload else { continue };
+                if let Some(found) = usage::codex_usage(&value, &file_stem, &model) {
+                    if date.is_none_or(|wanted| found.occurred_at.starts_with(wanted)) {
+                        parsed.usages.push(found);
+                    }
+                    continue;
+                }
                 if payload.get("type").and_then(Value::as_str) != Some("item_completed") {
                     continue;
                 }
@@ -699,6 +718,7 @@ pub fn store_codex(conn: &mut Connection, path: &Path, parsed: &CodexParsed, sav
         }
     }
     store_calls(&tx, CODEX_TOOL, &source_file, &parsed.calls)?;
+    store_usages(&tx, CODEX_TOOL, &source_file, &parsed.usages)?;
     report.skipped_lines += parsed.skipped_lines;
     if save_offset {
         let saved: i64 = tx
@@ -784,6 +804,7 @@ fn import_file(
     let mut title: Option<String> = None;
     let mut breaks: Vec<String> = Vec::new();
     let mut calls: Vec<ToolCall> = Vec::new();
+    let mut usages: Vec<TokenUsage> = Vec::new();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line?;
@@ -794,6 +815,7 @@ fn import_file(
         if let Some(found) = ai_title(&value) { title = Some(found); }
         if let Some(at) = compact_boundary(&value) { breaks.push(at); }
         calls.extend(tools::claude_calls(&value).into_iter().filter(|call| date.is_none_or(|wanted| call.occurred_at.starts_with(wanted))));
+        usages.extend(usage::claude_usage(&value).filter(|u| date.is_none_or(|wanted| u.occurred_at.starts_with(wanted))));
         if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
             if project_path.is_empty() {
                 project_path = cwd.to_string();
@@ -840,6 +862,7 @@ fn import_file(
         report.events += inserted;
     }
     store_calls(tx, CLAUDE_TOOL, &source_file, &calls)?;
+    store_usages(tx, CLAUDE_TOOL, &source_file, &usages)?;
     if let Some(title) = title { set_title(tx, &source_file, &title)?; }
     record_breaks(tx, &source_file, &breaks)?;
     Ok(true)
@@ -855,6 +878,20 @@ fn store_calls(conn: &Connection, source_tool: &str, source_file: &str, calls: &
         .optional()?;
     match session_id {
         Some(id) => tools::store(conn, id, source_tool, calls),
+        None => Ok(0),
+    }
+}
+
+/// この記録ファイルの会話(すでにあるとき)に、トークン数を保存する。会話がまだ無ければ、何もしない。入れた(変わった)件数を返す。
+fn store_usages(conn: &Connection, source_tool: &str, source_file: &str, usages: &[TokenUsage]) -> Result<usize> {
+    if usages.is_empty() {
+        return Ok(0);
+    }
+    let session_id: Option<i64> = conn
+        .query_row("SELECT id FROM sessions WHERE source_tool = ?1 AND source_file = ?2", params![source_tool, source_file], |row| row.get(0))
+        .optional()?;
+    match session_id {
+        Some(id) => usage::store(conn, id, source_tool, usages),
         None => Ok(0),
     }
 }
@@ -891,6 +928,8 @@ fn record_breaks(tx: &rusqlite::Transaction<'_>, source_file: &str, breaks: &[St
 
 const CLAUDE_CALLS_DONE: &str = "tool_calls_backfilled_claude";
 const CODEX_CALLS_DONE: &str = "tool_calls_backfilled_codex";
+const CLAUDE_USAGE_DONE: &str = "token_usage_backfilled_claude";
+const CODEX_USAGE_DONE: &str = "token_usage_backfilled_codex";
 
 /// すでに取り込んだ Claude Code の会話に、記録ファイルから、ツールの呼び出しをさかのぼって保存する。**1 度だけ**走る
 /// (増分の収集は、読み済みの位置から先しか読まないため)。返り値は、入れた件数。記録ファイルが消えていれば、補えない。
@@ -953,6 +992,71 @@ pub fn backfill_tool_calls_codex(conn: &std::sync::Mutex<Connection>, root: &Pat
     }
     let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
     crate::sync::store::set(&conn, CODEX_CALLS_DONE, "1")?;
+    Ok(added)
+}
+
+/// すでに取り込んだ Claude Code の会話に、記録ファイルから、トークン数をさかのぼって保存する。**1 度だけ**走る
+/// (増分の収集は、読み済みの位置から先しか読まないため)。返り値は、入れた件数。記録ファイルが消えていれば、補えない。
+pub fn backfill_token_usage_claude(root: &Path, conn: &mut Connection) -> Result<usize> {
+    if crate::sync::store::get(conn, CLAUDE_USAGE_DONE)?.as_deref() == Some("1") { return Ok(0); }
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let tx = conn.transaction()?;
+    let mut added = 0;
+    for path in files {
+        let Ok(file) = File::open(&path) else { continue; };
+        let mut usages: Vec<TokenUsage> = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break; };
+            if !line.contains("\"usage\"") { continue; }
+            if let Ok(value) = serde_json::from_str::<Value>(&line) { usages.extend(usage::claude_usage(&value)); }
+        }
+        added += store_usages(&tx, CLAUDE_TOOL, &path.to_string_lossy(), &usages)?;
+    }
+    tx.execute("INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = '1'", [CLAUDE_USAGE_DONE])?;
+    tx.commit()?;
+    Ok(added)
+}
+
+/// Codex の記録ファイル全体から、トークン数だけを読む(DB には触らない。数百 MB になるので、DB のロックの外で呼ぶ)。
+pub fn parse_codex_usage(path: &Path) -> Result<Vec<TokenUsage>> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut reader = BufReader::with_capacity(1 << 20, file);
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex").to_string();
+    let mut model = String::new();
+    let mut usages = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 { break; }
+        if line.last() != Some(&b'\n') { break; }
+        let counted = contains(&line, b"\"token_count\"");
+        if !counted && !contains(&line, b"\"turn_context\"") { continue; }
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else { continue };
+        if let Some(found) = usage::codex_model(&value) { model = found; }
+        if counted { usages.extend(usage::codex_usage(&value, &file_stem, &model)); }
+    }
+    Ok(usages)
+}
+
+/// すでに取り込んだ Codex の会話に、トークン数をさかのぼって保存する。**1 度だけ**走る。
+/// 記録ファイルは大きいので、読む間は DB のロックを持たず、書くときだけ持つ。返り値は、入れた件数。
+pub fn backfill_token_usage_codex(conn: &std::sync::Mutex<Connection>, root: &Path) -> Result<usize> {
+    {
+        let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        if crate::sync::store::get(&conn, CODEX_USAGE_DONE)?.as_deref() == Some("1") { return Ok(0); }
+    }
+    let mut added = 0;
+    for path in codex_files(root)? {
+        let usages = match parse_codex_usage(&path) {
+            Ok(usages) => usages,
+            Err(error) => { eprintln!("synclane token usage: {}: {error:#}", path.display()); continue; }
+        };
+        let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        added += store_usages(&conn, CODEX_TOOL, &path.to_string_lossy(), &usages)?;
+    }
+    let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+    crate::sync::store::set(&conn, CODEX_USAGE_DONE, "1")?;
     Ok(added)
 }
 
@@ -1485,6 +1589,95 @@ mod tests {
         conn.execute("DELETE FROM tool_calls", [])?;
         assert_eq!(backfill_tool_calls_claude(&temp, &mut conn)?, 0);
         assert!(calls_of(&conn).is_empty());
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    fn usage_of(conn: &Connection) -> Vec<(String, String, String, i64, i64, i64)> {
+        let mut stmt = conn
+            .prepare("SELECT source_tool, source_usage_id, model, input_tokens, output_tokens, cache_read_tokens FROM token_usage ORDER BY occurred_at, id")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[test]
+    fn claude_token_usage_counts_one_reply_once_and_is_backfilled_once() -> Result<()> {
+        let temp = tempfile_dir();
+        let lines = [
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-20T01:00:00Z","cwd":"/work/app","message":{"content":"質問"}}"#,
+            // 同じ返答(msg_a)が、内容のブロックごとに 2 つの行に出る。出力は、途中の数 → 最後の数
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","timestamp":"2026-10-20T01:00:05Z","cwd":"/work/app","message":{"id":"msg_a","model":"claude-sonnet-5","content":[{"type":"text","text":"回答です"}],"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000}}}"#,
+            r#"{"type":"assistant","uuid":"a2","sessionId":"s1","timestamp":"2026-10-20T01:00:06Z","cwd":"/work/app","message":{"id":"msg_a","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":10,"output_tokens":120,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000}}}"#,
+            r#"{"type":"assistant","uuid":"a3","sessionId":"s1","timestamp":"2026-10-20T01:01:00Z","cwd":"/work/app","message":{"id":"msg_b","model":"claude-opus-5","content":[{"type":"text","text":"続きです"}],"usage":{"input_tokens":5,"output_tokens":50}}}"#,
+            // 合成された返答は、数えない
+            r#"{"type":"assistant","uuid":"a4","sessionId":"s1","timestamp":"2026-10-20T01:02:00Z","cwd":"/work/app","message":{"id":"msg_s","model":"<synthetic>","content":[{"type":"text","text":"中断"}],"usage":{"input_tokens":0,"output_tokens":0}}}"#,
+        ];
+        std::fs::write(temp.join("session.jsonl"), lines.join("\n") + "\n")?;
+        let mut conn = db::open_memory()?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        let expected = vec![
+            ("claude_code".to_string(), "msg_a".to_string(), "claude-sonnet-5".to_string(), 10, 120, 4000),
+            ("claude_code".to_string(), "msg_b".to_string(), "claude-opus-5".to_string(), 5, 50, 0),
+        ];
+        assert_eq!(usage_of(&conn), expected);
+        // もう一度読んでも、増えない
+        collect_claude_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn), expected);
+        // 追記: 新しい返答が増える
+        let more = r#"{"type":"assistant","uuid":"a5","sessionId":"s1","timestamp":"2026-10-21T01:00:00Z","cwd":"/work/app","message":{"id":"msg_c","model":"claude-sonnet-5","content":[{"type":"text","text":"翌日"}],"usage":{"input_tokens":7,"output_tokens":8}}}"#;
+        let mut text = std::fs::read_to_string(temp.join("session.jsonl"))?;
+        text.push_str(more);
+        text.push('\n');
+        std::fs::write(temp.join("session.jsonl"), text)?;
+        collect_claude_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn).len(), 3);
+        // この版より前に取り込んだ状態から、さかのぼって補う(1 度だけ)
+        conn.execute("DELETE FROM token_usage", [])?;
+        assert_eq!(backfill_token_usage_claude(&temp, &mut conn)?, 3);
+        assert_eq!(usage_of(&conn).len(), 3);
+        conn.execute("DELETE FROM token_usage", [])?;
+        assert_eq!(backfill_token_usage_claude(&temp, &mut conn)?, 0);
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn codex_token_usage_uses_the_last_call_the_model_from_the_turn_and_ignores_repeats() -> Result<()> {
+        let temp = tempfile_dir();
+        let day = temp.join("2026").join("10").join("20");
+        std::fs::create_dir_all(&day)?;
+        let lines = [
+            r#"{"timestamp":"2026-10-20T11:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"sess-9","cwd":"/work/app"}}"#,
+            r#"{"timestamp":"2026-10-20T11:00:00.500Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"timestamp":"2026-10-20T11:00:01.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"テストを回して"}]}}}"#,
+            r#"{"timestamp":"2026-10-20T11:00:02.000Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1050},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":20}}}}"#,
+            // 同じ累計が続けて出る(1 件にまとめる)
+            r#"{"timestamp":"2026-10-20T11:00:02.100Z","ordinal":4,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1050},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":20}}}}"#,
+            // 利用枠の情報だけ(数えない)
+            r#"{"timestamp":"2026-10-20T11:00:02.200Z","ordinal":5,"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{}}}"#,
+            r#"{"timestamp":"2026-10-20T11:00:05.000Z","ordinal":6,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","content":[{"type":"text","text":"通りました"}]}}}"#,
+            r#"{"timestamp":"2026-10-20T11:00:06.000Z","ordinal":7,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1400},"last_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":0}}}}"#,
+        ];
+        let file = day.join("rollout-2026-10-20T20-00-00-xyz.jsonl");
+        std::fs::write(&file, lines.join("\n") + "\n")?;
+        let mut conn = db::open_memory()?;
+        collect_codex_incremental(&temp, &mut conn)?;
+        let expected = vec![
+            ("codex".to_string(), "rollout-2026-10-20T20-00-00-xyz:1050".to_string(), "gpt-5".to_string(), 200, 50, 800),
+            ("codex".to_string(), "rollout-2026-10-20T20-00-00-xyz:1400".to_string(), "gpt-5".to_string(), 300, 50, 0),
+        ];
+        assert_eq!(usage_of(&conn), expected);
+        collect_codex_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn), expected);
+        // さかのぼり(1 度だけ)
+        conn.execute("DELETE FROM token_usage", [])?;
+        let shared = std::sync::Mutex::new(conn);
+        assert_eq!(backfill_token_usage_codex(&shared, &temp)?, 2);
+        assert_eq!(backfill_token_usage_codex(&shared, &temp)?, 0);
+        assert_eq!(usage_of(&shared.lock().unwrap()), expected);
+        // 日付の指定(CLI): その日だけ
+        let parsed = parse_codex_file(&file, 0, Some("2026-10-19"))?;
+        assert!(parsed.usages.is_empty());
         std::fs::remove_dir_all(temp)?;
         Ok(())
     }

@@ -209,6 +209,7 @@ fn configure(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
     migrate(conn)?;
     ensure_tool_calls(conn)?;
+    ensure_token_usage(conn)?;
     ensure_search_index(conn)
 }
 
@@ -236,6 +237,37 @@ pub fn has_tool_calls(conn: &Connection) -> bool {
 
 fn ensure_tool_calls(conn: &Connection) -> Result<()> {
     conn.execute_batch(TOOL_CALLS)?;
+    Ok(())
+}
+
+/// トークン数(入力・出力・キャッシュ)。`usage.rs`。数だけで、会話の本文は持たない。全文検索の索引・MCP・サーバー送信の対象ではない。
+/// **スキーマの版は変えない**(無ければ作るだけ。古いアプリは、この表を使わない)。
+const TOKEN_USAGE: &str = r#"
+CREATE TABLE IF NOT EXISTS token_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_tool TEXT NOT NULL,
+    source_usage_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (source_tool, source_usage_id)
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_time ON token_usage(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
+"#;
+
+/// トークン数の表が、このデータベースにあるか(読み取り専用で開いた、古い版のデータベースには、無いことがある)。
+pub fn has_token_usage(conn: &Connection) -> bool {
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'token_usage'", [], |_| Ok(())).is_ok()
+}
+
+fn ensure_token_usage(conn: &Connection) -> Result<()> {
+    conn.execute_batch(TOKEN_USAGE)?;
     Ok(())
 }
 

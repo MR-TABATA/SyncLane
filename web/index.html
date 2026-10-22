@@ -10,6 +10,10 @@
       font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
       /* 設定の「外観」で変えられるのは、この4つ。ほかの色は背景色と文字色から導く */
       --bg: #252832; --text: #eeeef0; --accent: #b89558; --accent-text: #17130d;
+      /* 使用量の積み上げ棒(入力・出力・キャッシュ作成)。明暗それぞれで検証した 3 色。light-dark() が使えない環境では、暗い側の色になる */
+      --series-input: #3987e5; --series-input: light-dark(#2a78d6, #3987e5);
+      --series-output: #d95926; --series-output: light-dark(#eb6834, #d95926);
+      --series-cache: #199e70; --series-cache: light-dark(#1baf7a, #199e70);
       --content-font: inherit; --content-size: 14px;
       --surface: color-mix(in srgb, var(--bg), var(--text) 5%);
       --surface-2: color-mix(in srgb, var(--bg), var(--text) 13%);
@@ -155,6 +159,32 @@
     .export-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
     .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .export-panel .opt-row { margin-top: 10px; align-items: center; }
+    .usage-panel { width: min(920px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+    .usage-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    .usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .usage-tabs { display: flex; gap: 4px; }
+    .usage-tabs button { padding: 4px 10px; font-size: 12px; background: transparent; }
+    .usage-tabs button[aria-selected="true"] { background: var(--selected); border-color: var(--accent); font-weight: 650; }
+    .usage-total { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .usage-table-wrap { max-height: 46vh; overflow: auto; border-top: 1px solid var(--line); }
+    .usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+    .usage-table th { position: sticky; top: 0; padding: 6px 8px; background: var(--surface); color: var(--faint); font-weight: 500; text-align: right; white-space: nowrap; }
+    .usage-table td { padding: 5px 8px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    .usage-table th:first-child, .usage-table td:first-child { text-align: left; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+    .usage-table th.bar, .usage-table td.bar { width: 28%; min-width: 120px; text-align: left; }
+    .usage-track { display: block; position: relative; height: 8px; }
+    .usage-stack { position: absolute; left: 0; top: 0; bottom: 0; display: flex; gap: 2px; min-width: 2px; }
+    .usage-seg { min-width: 2px; }
+    .usage-seg:last-child { border-radius: 0 4px 4px 0; }
+    .usage-seg.input { background: var(--series-input); }
+    .usage-seg.output { background: var(--series-output); }
+    .usage-seg.cache { background: var(--series-cache); }
+    .usage-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+    .usage-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+    .usage-legend i.input { background: var(--series-input); }
+    .usage-legend i.output { background: var(--series-output); }
+    .usage-legend i.cache { background: var(--series-cache); }
     .export-prompt { margin: 10px 0; gap: 4px; }
     .export-calls { display: flex; gap: 8px; margin: 0 0 10px; font-size: 13px; cursor: pointer; }
     .export-calls input { margin: 0; }
@@ -208,6 +238,9 @@
       <button id="toggle-search" class="icon-button" type="button" data-i18n-title="search" aria-label="検索">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       </button>
+      <button id="usage-btn" class="icon-button" type="button" data-i18n-title="usageTip" aria-label="トークン使用量">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="11"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg>
+      </button>
       <button id="settings-btn" class="icon-button" type="button" data-i18n-title="settingsTip" aria-label="設定">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -255,6 +288,30 @@
         <button id="title-cancel" type="button" data-i18n="titleCancel">キャンセル</button>
         <span id="title-status" class="note"></span>
       </div>
+    </div>
+  </div>
+  <div id="usage-overlay" class="overlay" hidden>
+    <div class="usage-panel" role="dialog" aria-labelledby="usage-heading">
+      <h2 id="usage-heading" data-i18n="usageHeading">トークン使用量</h2>
+      <div class="usage-controls">
+        <select id="usage-period" aria-label="期間">
+          <option value="today" data-i18n="usageToday">今日</option>
+          <option value="7" data-i18n="usage7">7 日間</option>
+          <option value="30" data-i18n="usage30" selected>30 日間</option>
+          <option value="all" data-i18n="usageAll">すべて</option>
+        </select>
+        <div class="usage-tabs" role="tablist">
+          <button type="button" role="tab" data-usage-group="day" data-i18n="usageByDay">日別</button>
+          <button type="button" role="tab" data-usage-group="project" data-i18n="usageByProject">プロジェクト別</button>
+          <button type="button" role="tab" data-usage-group="model" data-i18n="usageByModel">モデル別</button>
+          <button type="button" role="tab" data-usage-group="tool" data-i18n="usageByTool">ツール別</button>
+        </div>
+      </div>
+      <p id="usage-total" class="usage-total"></p>
+      <div id="usage-legend" class="usage-legend" hidden></div>
+      <div class="usage-table-wrap"><table id="usage-table" class="usage-table"></table></div>
+      <p class="note" data-i18n="usageNote">Claude Code と Codex の記録から集計しています。Gemini CLI・Antigravity・Web 版の Gemini と ChatGPT は、記録にトークン数がないので、含まれません。費用（金額）は、計算しません。</p>
+      <div class="opt-row"><button id="usage-close" type="button" data-i18n="close">閉じる</button></div>
     </div>
   </div>
   <div id="export-overlay" class="overlay" hidden>
@@ -366,6 +423,12 @@
         titleSave: '保存', titleCancel: 'キャンセル', titleFailed: (e) => `できませんでした: ${e}`,
         resumeOpenBtn: 'ターミナルで、この会話を再開', resumeOpened: (c) => `ターミナルを開きました: ${c}`,
         resumeBtn: 'この会話を再開するコマンドをコピー', resumeNone: 'この会話には、再開するコマンドがありません', resumeCopied: (c) => `コピーしました: ${c}`, resumeFailed: (e) => `できませんでした: ${e}`,
+        usageTip: 'トークン使用量', usageHeading: 'トークン使用量', usageToday: '今日', usage7: '7 日間', usage30: '30 日間', usageAll: 'すべて',
+        usageByDay: '日別', usageByProject: 'プロジェクト別', usageByModel: 'モデル別', usageByTool: 'ツール別',
+        usageNote: 'Claude Code と Codex の記録から集計しています。Gemini CLI・Antigravity・Web 版の Gemini と ChatGPT は、記録にトークン数がないので、含まれません。費用（金額）は、計算しません。',
+        usageCols: ['入力', '出力', 'キャッシュ作成', 'キャッシュ読み出し', '回数'], usageNew: '入力 + 出力 + キャッシュ作成', usageModelUnknown: '(不明)',
+        usageTotal: (calls, input, output, cc, cr) => `合計 ${calls} 回 / 入力 ${input} / 出力 ${output} / キャッシュ作成 ${cc} / キャッシュ読み出し ${cr}`,
+        usageEmpty: 'この期間の、トークン数の記録はありません。過去の会話の分は、アプリを起動したあと、少しずつ読み込まれます。', usageTruncated: (n) => `上位 ${n} 件だけを表示しています。`, usageFailed: (e) => `できませんでした: ${e}`,
         sbHead: 'プロジェクト', sbAll: 'すべてのプロジェクト', sbFilter: 'このプロジェクトだけを表示(もう一度押すと、すべて)', sbMore: (n) => `あと ${n} 件を表示`, sbEmpty: '会話はまだありません',
         exportBtn: 'この話題を Markdown でコピー', exportHeading: 'この話題を Markdown でコピー',
         exportScope: 'この話題（前の発言と 30 分以上あいた位置などで区切った、ひとまとまり）の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。',
@@ -401,6 +464,12 @@
         titleSave: 'Save', titleCancel: 'Cancel', titleFailed: (e) => `Failed: ${e}`,
         resumeOpenBtn: 'Resume this conversation in Terminal', resumeOpened: (c) => `Opened Terminal: ${c}`,
         resumeBtn: 'Copy the command to resume this conversation', resumeNone: 'There is no resume command for this conversation', resumeCopied: (c) => `Copied: ${c}`, resumeFailed: (e) => `Failed: ${e}`,
+        usageTip: 'Token usage', usageHeading: 'Token usage', usageToday: 'Today', usage7: 'Last 7 days', usage30: 'Last 30 days', usageAll: 'All time',
+        usageByDay: 'By day', usageByProject: 'By project', usageByModel: 'By model', usageByTool: 'By tool',
+        usageNote: 'Counted from the logs of Claude Code and Codex. Gemini CLI, Antigravity and the web versions of Gemini and ChatGPT do not record token counts, so they are not included. Costs (money) are not calculated.',
+        usageCols: ['Input', 'Output', 'Cache write', 'Cache read', 'Calls'], usageNew: 'Input + output + cache write', usageModelUnknown: '(unknown)',
+        usageTotal: (calls, input, output, cc, cr) => `Total ${calls} calls / input ${input} / output ${output} / cache write ${cc} / cache read ${cr}`,
+        usageEmpty: 'No token counts were recorded for this period. Past conversations are read in gradually after the app starts.', usageTruncated: (n) => `Showing the top ${n} only.`, usageFailed: (e) => `Failed: ${e}`,
         sbHead: 'Projects', sbAll: 'All projects', sbFilter: 'Show only this project (press again for all)', sbMore: (n) => `Show ${n} more`, sbEmpty: 'No conversations yet',
         exportBtn: 'Copy this topic as Markdown', exportHeading: 'Copy this topic as Markdown',
         exportScope: 'Writes out this topic (a stretch of the conversation, split where there was a gap of 30 minutes or more and so on): your messages and the AI\'s, plus the commands that were run and the files that were touched. Tool output and the AI\'s reasoning are not saved, so they are not included.',
@@ -880,6 +949,70 @@
         flashButton(button, '✕', t('resumeFailed', error));
       }
     }
+    // ---- トークン使用量(表と横棒。集計は Rust。費用は計算しない) ----
+    let usageGroup = 'day';
+    let usageSeq = 0;
+    function usageBounds(period) {
+      const today = localDate(new Date());
+      if (period === 'today') return { from: dayStart(today), to: null };
+      if (period === '7') return { from: dayStart(addDays(today, -6)), to: null };
+      if (period === '30') return { from: dayStart(addDays(today, -29)), to: null };
+      return { from: null, to: null };
+    }
+    const compactNumber = (n) => new Intl.NumberFormat(resolvedLang() === 'ja' ? 'ja-JP' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+    const fullNumber = (n) => n.toLocaleString(resolvedLang() === 'ja' ? 'ja-JP' : 'en-US');
+    function usageLabel(row) {
+      if (usageGroup === 'model') return row.key || t('usageModelUnknown');
+      if (usageGroup === 'tool') return sourceLabel(row.key);
+      return row.label || row.key;
+    }
+    async function refreshUsage() {
+      const seq = ++usageSeq;
+      for (const tab of document.querySelectorAll('[data-usage-group]')) tab.setAttribute('aria-selected', tab.dataset.usageGroup === usageGroup ? 'true' : 'false');
+      try {
+        const bounds = usageBounds($('usage-period').value);
+        const summary = await invoke('usage_summary', { dateFrom: bounds.from, dateTo: bounds.to, groupBy: usageGroup, utcOffsetMinutes: -new Date().getTimezoneOffset(), limit: 100 });
+        if (seq !== usageSeq) return;
+        const total = summary.total;
+        if (!total.calls) { $('usage-total').textContent = t('usageEmpty'); $('usage-table').innerHTML = ''; $('usage-legend').hidden = true; return; }
+        $('usage-total').textContent = t('usageTotal', fullNumber(total.calls), compactNumber(total.input), compactNumber(total.output), compactNumber(total.cache_creation), compactNumber(total.cache_read)) + (summary.truncated ? ' ' + t('usageTruncated', summary.rows.length) : '');
+        const fresh = (r) => r.input + r.output + r.cache_creation;
+        const max = Math.max(1, ...summary.rows.map(fresh));
+        const cols = t('usageCols');
+        const head = `<tr><th></th><th class="bar">${t('usageNew')}</th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
+        const body = summary.rows.map((r) => {
+          const tip = `${fullNumber(r.input)} / ${fullNumber(r.output)} / ${fullNumber(r.cache_creation)} / ${fullNumber(r.cache_read)}` + (r.reasoning ? ` (reasoning ${fullNumber(r.reasoning)})` : '');
+          const label = usageLabel(r);
+          return `<tr title="${escapeHtml(tip)}"><td title="${escapeHtml(usageGroup === 'project' ? r.key : label)}">${escapeHtml(label)}</td><td class="bar"><span class="usage-track"><span class="usage-stack" data-width="${Math.max(0.5, fresh(r) / max * 100).toFixed(1)}" data-parts="${r.input},${r.output},${r.cache_creation}"></span></span></td><td>${compactNumber(r.input)}</td><td>${compactNumber(r.output)}</td><td>${compactNumber(r.cache_creation)}</td><td>${compactNumber(r.cache_read)}</td><td>${fullNumber(r.calls)}</td></tr>`;
+        }).join('');
+        $('usage-table').innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
+        // 幅は、style 属性の文字列ではなく、直接設定する(このアプリの CSP は、文字列の style 属性を許さない)。棒は、入力・出力・キャッシュ作成の積み上げ
+        const kinds = ['input', 'output', 'cache'];
+        $('usage-table').querySelectorAll('.usage-stack').forEach((stack) => {
+          stack.style.width = `${stack.dataset.width}%`;
+          stack.dataset.parts.split(',').forEach((value, i) => {
+            if (!Number(value)) return;
+            const seg = document.createElement('span');
+            seg.className = `usage-seg ${kinds[i]}`;
+            seg.style.flex = `${Number(value)} 1 0%`;
+            stack.appendChild(seg);
+          });
+        });
+        $('usage-legend').innerHTML = kinds.map((k, i) => `<span><i class="${k}"></i>${cols[i]}</span>`).join('');
+        $('usage-legend').hidden = false;
+      } catch (error) {
+        if (seq !== usageSeq) return;
+        $('usage-total').textContent = t('usageFailed', error);
+        $('usage-table').innerHTML = '';
+        $('usage-legend').hidden = true;
+      }
+    }
+    $('usage-btn').addEventListener('click', () => { $('usage-overlay').hidden = false; refreshUsage(); });
+    $('usage-close').addEventListener('click', () => { $('usage-overlay').hidden = true; usageSeq++; });
+    $('usage-overlay').addEventListener('click', (event) => { if (event.target === $('usage-overlay')) { $('usage-overlay').hidden = true; usageSeq++; } });
+    $('usage-period').addEventListener('change', refreshUsage);
+    document.querySelectorAll('[data-usage-group]').forEach((tab) => tab.addEventListener('click', () => { usageGroup = tab.dataset.usageGroup; refreshUsage(); }));
+
     // ---- サイドバー(プロジェクトで絞り込み)----
     const SIDEBAR_PROJECTS = 15; // 最初に出すプロジェクトの数。残りは「あと N 件を表示」
     let sidebarProjects = [];

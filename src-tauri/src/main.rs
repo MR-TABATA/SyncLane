@@ -55,6 +55,21 @@ fn timeline(
     db::timeline_in_project(&conn, date_from.as_deref(), date_to.as_deref(), project.as_deref(), query.as_deref(), limit, order).map_err(|e| e.to_string())
 }
 
+/// トークン数の集計(期間・単位別)。読み取りだけ。`group_by` は `day` / `project` / `model` / `tool`。`utc_offset_minutes` は、日別を端末の時刻で切るための時差。
+#[tauri::command]
+fn usage_summary(
+    date_from: Option<String>,
+    date_to: Option<String>,
+    group_by: String,
+    utc_offset_minutes: i32,
+    limit: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> Result<synclane::usage::Summary, String> {
+    let group = synclane::usage::GroupBy::parse(&group_by).ok_or_else(|| format!("知らない集計の単位です: {group_by}"))?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::usage::summarize(&conn, date_from.as_deref(), date_to.as_deref(), group, utc_offset_minutes, limit.unwrap_or(100).clamp(1, 1000)).map_err(|e| format!("{e:#}"))
+}
+
 /// 「続きから」の一覧(サイドバー)。プロジェクトごとに、ツールごとの最新の会話を返す。読み取りだけ。
 #[tauri::command]
 fn project_overview(state: tauri::State<'_, AppState>) -> Result<Vec<synclane::projects::ProjectRow>, String> {
@@ -360,6 +375,15 @@ fn main() {
                 if let Err(error) = importer::backfill_tool_calls_codex(&collector_conn, &codex_root) {
                     eprintln!("synclane tool calls (codex): {error:#}");
                 }
+                // トークン数を、すでに取り込んだ会話にも、さかのぼって保存する(1 度だけ)
+                if let Ok(mut conn) = collector_conn.lock() {
+                    if let Err(error) = importer::backfill_token_usage_claude(&root, &mut conn) {
+                        eprintln!("synclane token usage (claude): {error:#}");
+                    }
+                }
+                if let Err(error) = importer::backfill_token_usage_codex(&collector_conn, &codex_root) {
+                    eprintln!("synclane token usage (codex): {error:#}");
+                }
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {
@@ -400,7 +424,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            status, timeline, project_overview, mcp_executable, open_search_window, close_search_window,
+            status, timeline, project_overview, usage_summary, mcp_executable, open_search_window, close_search_window,
             section_title_suggest, section_title_set, export_section, export_range, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
