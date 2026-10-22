@@ -33,6 +33,8 @@ pub struct ProjectRow {
     /// 表示の名前
     pub name: String,
     pub last_at: String,
+    /// このプロジェクトの会話の数(発言が 1 つ以上ある会話)
+    pub session_count: usize,
     /// ツールごとの最新の会話。新しい順
     pub sessions: Vec<LatestSession>,
 }
@@ -51,7 +53,9 @@ pub fn overview(conn: &Connection) -> Result<Vec<ProjectRow>> {
 
     // (プロジェクト, ツール) ごとに、最後の発言がいちばん新しい会話を残す(同じ時刻なら、新しく取り込んだほう)
     let mut latest: HashMap<(String, String), (i64, Option<String>, String)> = HashMap::new();
+    let mut totals: HashMap<String, usize> = HashMap::new();
     for (id, project, tool, title, last_at) in rows {
+        *totals.entry(project.clone()).or_default() += 1;
         let entry = latest.entry((project, tool)).or_insert((id, title.clone(), last_at.clone()));
         if (last_at.as_str(), id) > (entry.2.as_str(), entry.0) {
             *entry = (id, title, last_at);
@@ -65,10 +69,7 @@ pub fn overview(conn: &Connection) -> Result<Vec<ProjectRow>> {
             params![session_id],
             |r| r.get(0),
         )?;
-        let title = match title.filter(|t| !t.trim().is_empty()) {
-            Some(title) => title,
-            None => first_question(conn, session_id)?,
-        };
+        let title = title_or_first_question(conn, session_id, title)?;
         let resumable = crate::resume::supports(&tool);
         by_project.entry(project).or_default().push(LatestSession { session_id, source_tool: tool, title, last_event_id, last_at, resumable });
     }
@@ -81,11 +82,100 @@ pub fn overview(conn: &Connection) -> Result<Vec<ProjectRow>> {
             sessions.sort_by(|a, b| b.last_at.cmp(&a.last_at).then_with(|| a.source_tool.cmp(&b.source_tool)));
             let last_at = sessions.first().map(|s| s.last_at.clone()).unwrap_or_default();
             let name = names.get(&project_path).cloned().unwrap_or_else(|| project_path.clone());
-            ProjectRow { project_path, name, last_at, sessions }
+            let session_count = totals.get(&project_path).copied().unwrap_or(sessions.len());
+            ProjectRow { project_path, name, last_at, session_count, sessions }
         })
         .collect();
     projects.sort_by(|a, b| b.last_at.cmp(&a.last_at).then_with(|| a.project_path.cmp(&b.project_path)));
     Ok(projects)
+}
+
+/// プロジェクトの指定(名前または場所)を、プロジェクトに引き当てた結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    One(ProjectRow),
+    /// 複数に当たった(推測で 1 つに決めない。呼び出し側が、選び直させる)
+    Many(Vec<ProjectRow>),
+    None,
+}
+
+/// 名前または場所で、プロジェクトを探す。優先順: ①場所がそのまま一致 ②名前(表示の名前、または場所の末尾の名前)が、大文字小文字を無視して一致
+/// ③名前または場所の一部が、大文字小文字を無視して一致。各段で、ちょうど 1 つなら決まり、複数なら `Many`。当たらなければ次の段へ。
+pub fn find(conn: &Connection, input: &str) -> Result<Found> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(Found::None);
+    }
+    let projects = overview(conn)?;
+    let lower = input.to_lowercase();
+    let stages: [Box<dyn Fn(&ProjectRow) -> bool>; 3] = [
+        Box::new(|p| p.project_path == input),
+        Box::new(|p| p.name.to_lowercase() == lower || last_name(&p.project_path).to_lowercase() == lower),
+        Box::new(|p| p.name.to_lowercase().contains(&lower) || p.project_path.to_lowercase().contains(&lower)),
+    ];
+    for matches in stages {
+        let mut hit: Vec<ProjectRow> = projects.iter().filter(|p| matches(p)).cloned().collect();
+        match hit.len() {
+            0 => continue,
+            1 => return Ok(Found::One(hit.remove(0))),
+            _ => return Ok(Found::Many(hit)),
+        }
+    }
+    Ok(Found::None)
+}
+
+/// あるプロジェクトの、最近の会話 1 件の、最後の質問と最後の回答(切り詰める前の本文)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionContext {
+    pub session_id: i64,
+    pub source_tool: String,
+    pub title: String,
+    pub last_at: String,
+    pub last_question: Option<String>,
+    pub last_answer: Option<String>,
+}
+
+/// そのプロジェクトの、最近の会話(最後の発言が新しい順)。ツールは問わない。
+pub fn recent_sessions(conn: &Connection, project_path: &str, limit: usize) -> Result<Vec<SessionContext>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.source_tool, s.title, MAX(e.occurred_at) AS last_at
+         FROM sessions s JOIN events e ON e.session_id = s.id
+         WHERE s.project_path = ?1
+         GROUP BY s.id
+         ORDER BY last_at DESC, s.id DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![project_path, limit as i64], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let last_of = |session_id: i64, role: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT content FROM events WHERE session_id = ?1 AND role = ?2 ORDER BY occurred_at DESC, sequence DESC LIMIT 1",
+            params![session_id, role],
+            |r| r.get(0),
+        )
+        .ok()
+    };
+    rows.into_iter()
+        .map(|(session_id, source_tool, title, last_at)| {
+            Ok(SessionContext {
+                session_id,
+                source_tool,
+                title: title_or_first_question(conn, session_id, title)?,
+                last_at,
+                last_question: last_of(session_id, "user"),
+                last_answer: last_of(session_id, "assistant"),
+            })
+        })
+        .collect()
+}
+
+/// 会話の題名。無ければ、最初の質問の先頭(それも無ければ空)。
+fn title_or_first_question(conn: &Connection, session_id: i64, title: Option<String>) -> Result<String> {
+    match title.filter(|t| !t.trim().is_empty()) {
+        Some(title) => Ok(title),
+        None => first_question(conn, session_id),
+    }
 }
 
 fn first_question(conn: &Connection, session_id: i64) -> Result<String> {
@@ -100,7 +190,7 @@ fn first_question(conn: &Connection, session_id: i64) -> Result<String> {
 }
 
 /// 場所の末尾の名前。区切りは `/` と `\`(Windows の記録も、そのまま読める)。末尾が空なら、場所そのもの。
-fn last_name(path: &str) -> &str {
+pub(crate) fn last_name(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(path)
 }
 
@@ -193,6 +283,70 @@ mod tests {
         let conn = db::open_memory()?;
         session(&conn, "claude_code", "/work/empty", Some("空"), "e");
         assert!(overview(&conn)?.is_empty());
+        Ok(())
+    }
+
+    fn two_apps_and_sync_lane(conn: &Connection) {
+        let a = session(conn, "claude_code", "/a/app", Some("ログイン"), "a");
+        event(conn, a, "2026-10-12T01:00:00.000Z", "user", "ログインを直して", 0);
+        event(conn, a, "2026-10-12T01:05:00.000Z", "assistant", "直しました", 1);
+        let b = session(conn, "claude_code", "/b/app", Some("ビルド"), "b");
+        event(conn, b, "2026-10-01T01:00:00.000Z", "user", "ビルドが遅い", 0);
+        let s1 = session(conn, "claude_code", "/work/SyncLane", Some("古い会話"), "c");
+        event(conn, s1, "2026-09-01T01:00:00.000Z", "user", "古い質問", 0);
+        let s2 = session(conn, "codex", "/work/SyncLane", None, "d");
+        event(conn, s2, "2026-10-10T01:00:00.000Z", "user", "新しい質問\nです", 0);
+    }
+
+    #[test]
+    fn counts_every_conversation_even_when_only_the_newest_per_tool_is_kept() -> Result<()> {
+        let conn = db::open_memory()?;
+        two_apps_and_sync_lane(&conn);
+        let projects = overview(&conn)?;
+        let sync_lane = projects.iter().find(|p| p.project_path == "/work/SyncLane").unwrap();
+        assert_eq!(sync_lane.session_count, 2);
+        assert_eq!(sync_lane.sessions.len(), 2); // Claude Code と Codex に 1 本ずつ
+        Ok(())
+    }
+
+    #[test]
+    fn find_prefers_the_exact_place_then_the_exact_name_and_never_guesses_between_several() -> Result<()> {
+        let conn = db::open_memory()?;
+        two_apps_and_sync_lane(&conn);
+        let one = |input: &str| match find(&conn, input).unwrap() {
+            Found::One(p) => p.project_path,
+            other => panic!("{input}: {other:?}"),
+        };
+        // 場所がそのまま
+        assert_eq!(one("/b/app"), "/b/app");
+        // 親つきの表示名・大文字小文字の違い・名前の一部
+        assert_eq!(one("b/app"), "/b/app");
+        assert_eq!(one("SYNCLANE"), "/work/SyncLane");
+        assert_eq!(one("Sync"), "/work/SyncLane");
+        // 末尾の名前が重なるときは、決めない
+        match find(&conn, "app")? {
+            Found::Many(candidates) => assert_eq!(candidates.iter().map(|p| p.project_path.as_str()).collect::<Vec<_>>(), ["/a/app", "/b/app"]),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(find(&conn, "nothing")?, Found::None);
+        assert_eq!(find(&conn, "  ")?, Found::None);
+        Ok(())
+    }
+
+    #[test]
+    fn recent_sessions_are_newest_first_with_the_last_question_and_answer() -> Result<()> {
+        let conn = db::open_memory()?;
+        two_apps_and_sync_lane(&conn);
+        let recent = recent_sessions(&conn, "/work/SyncLane", 10)?;
+        assert_eq!(recent.iter().map(|s| (s.source_tool.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("codex", "新しい質問 です"), ("claude_code", "古い会話")]);
+        assert_eq!(recent[0].last_question.as_deref(), Some("新しい質問\nです"));
+        assert_eq!(recent[0].last_answer, None);
+        // 件数の上限
+        assert_eq!(recent_sessions(&conn, "/work/SyncLane", 1)?.len(), 1);
+        // 最後の質問と、最後の回答
+        let login = recent_sessions(&conn, "/a/app", 5)?;
+        assert_eq!((login[0].last_question.as_deref(), login[0].last_answer.as_deref()), (Some("ログインを直して"), Some("直しました")));
+        assert!(recent_sessions(&conn, "/nothing", 5)?.is_empty());
         Ok(())
     }
 
