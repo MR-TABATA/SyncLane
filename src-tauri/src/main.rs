@@ -70,9 +70,24 @@ fn section_title_suggest(event_id: i64, state: tauri::State<'_, AppState>) -> Re
     synclane::titles::suggest_local(&section.messages).ok_or_else(|| "提案できる発言がありません".to_string())
 }
 
+/// 画面の指定から、書き出しの設定を作る。`prompt` は、先頭に付ける別の AI への依頼文(`summarize` / `continue` / `review`。空・`none` は付けない。知らない名前は、断る)。
+/// `include_calls` は、ツールの呼び出しも書き出すか(省略したら、書き出す)。
+fn export_options(keep_secrets: bool, lang: &str, utc_offset_minutes: i32, prompt: Option<&str>, include_calls: Option<bool>) -> Result<synclane::export::Options, String> {
+    let prompt = match prompt {
+        None => synclane::export::Prompt::None,
+        Some(name) => synclane::export::Prompt::parse(name).ok_or_else(|| format!("知らない依頼文です: {name}"))?,
+    };
+    Ok(synclane::export::Options {
+        prompt,
+        include_calls: include_calls.unwrap_or(true),
+        secrets: if keep_secrets { synclane::export::Secrets::Keep } else { synclane::export::Secrets::Mask },
+        lang: if lang == "ja" { synclane::export::Lang::Ja } else { synclane::export::Lang::En },
+        utc_offset_minutes,
+    })
+}
+
 /// 指した発言が属する区切りを、Markdown にする(コピーする前の見本にも、そのまま使う)。外には何も送らない。
 /// `keep_secrets` が true なら、秘密に見えるものも、そのまま書き出す(既定は、伏せる)。`utc_offset_minutes` は、画面の端末の時差。
-/// `prompt` は、先頭に付ける別の AI への依頼文(`summarize` / `continue` / `review`。空・`none` は付けない)。知らない名前は、断る。
 #[tauri::command]
 fn export_section(
     event_id: i64,
@@ -80,20 +95,41 @@ fn export_section(
     lang: String,
     utc_offset_minutes: i32,
     prompt: Option<String>,
+    include_calls: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<synclane::export::Exported, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let prompt = match prompt.as_deref() {
-        None => synclane::export::Prompt::None,
-        Some(name) => synclane::export::Prompt::parse(name).ok_or_else(|| format!("知らない依頼文です: {name}"))?,
-    };
-    let options = synclane::export::Options {
-        prompt,
-        secrets: if keep_secrets { synclane::export::Secrets::Keep } else { synclane::export::Secrets::Mask },
-        lang: if lang == "ja" { synclane::export::Lang::Ja } else { synclane::export::Lang::En },
-        utc_offset_minutes,
-    };
+    let options = export_options(keep_secrets, &lang, utc_offset_minutes, prompt.as_deref(), include_calls)?;
     synclane::export::section_markdown(&conn, event_id, &options).map_err(|e| format!("{e:#}"))
+}
+
+/// 画面に出ている範囲(日付・プロジェクト・検索語)の話題を、1 つの Markdown にする(新しい 50 件まで)。外には何も送らない。
+/// `label` は、書き出しの冒頭に書く範囲の説明(画面が作る)。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn export_range(
+    date_from: Option<String>,
+    date_to: Option<String>,
+    project: Option<String>,
+    query: Option<String>,
+    label: Option<String>,
+    keep_secrets: bool,
+    lang: String,
+    utc_offset_minutes: i32,
+    prompt: Option<String>,
+    include_calls: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> Result<synclane::export::Exported, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let options = export_options(keep_secrets, &lang, utc_offset_minutes, prompt.as_deref(), include_calls)?;
+    let range = synclane::export::Range {
+        date_from: date_from.as_deref(),
+        date_to: date_to.as_deref(),
+        project: project.as_deref(),
+        query: query.as_deref(),
+        label: label.as_deref(),
+    };
+    synclane::export::range_markdown(&conn, &range, &options).map_err(|e| format!("{e:#}"))
 }
 
 /// その発言の会話を、元のツール(Claude Code・Codex)で再開するコマンド。対応していない会話は None。コマンドを返すだけで、実行はしない。
@@ -365,7 +401,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             status, timeline, project_overview, mcp_executable, open_search_window, close_search_window,
-            section_title_suggest, section_title_set, export_section, resume_command, resume_open,
+            section_title_suggest, section_title_set, export_section, export_range, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set

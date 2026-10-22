@@ -71,13 +71,15 @@ pub struct Options {
     pub lang: Lang,
     /// 先頭に付ける依頼文
     pub prompt: Prompt,
+    /// ツールの呼び出し(実行したコマンド・触ったファイル)も書き出すか。範囲の書き出しは、長くなるので、画面の既定はオフ
+    pub include_calls: bool,
     /// 時刻を表示するときの、UTC からのずれ(分)。画面は、使っている端末のずれを渡す
     pub utc_offset_minutes: i32,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { secrets: Secrets::Mask, lang: Lang::Ja, prompt: Prompt::None, utc_offset_minutes: 0 }
+        Options { secrets: Secrets::Mask, lang: Lang::Ja, prompt: Prompt::None, include_calls: true, utc_offset_minutes: 0 }
     }
 }
 
@@ -111,6 +113,12 @@ pub struct Exported {
     pub masked: usize,
     pub messages: usize,
     pub calls: usize,
+    /// 書き出した話題(区切り)の数。1 つの区切りの書き出しは 1
+    pub sections: usize,
+    /// 該当した話題の数。上限(`MAX_SECTIONS`)を超えたときは、書き出した数より多い。集めた発言の上限に達したときは、`truncated` が立つ
+    pub total_sections: usize,
+    /// 上限のために、一部しか書き出していない
+    pub truncated: bool,
 }
 
 /// ある発言が属する区切りを、書き出す形に集める。
@@ -267,8 +275,21 @@ fn code_block(text: &str, indent: &str) -> String {
     out
 }
 
+/// 書き出しの見出しの付け方。
+#[derive(Debug, Clone, Copy)]
+struct Layout {
+    /// 区切りの題名の見出しの深さ(1 なら `#`)。発言の見出しは、1 つ深い
+    level: usize,
+    /// 1 つの区切りだけの書き出し(注意書き・伏せた件数・区切り線を付ける)。範囲の書き出しでは、冒頭にまとめて 1 回だけ書く
+    standalone: bool,
+}
+
 /// 集めた区切りを、Markdown にする。
 pub fn render(group: &Group, options: &Options, lists: &Lists) -> Exported {
+    render_with(group, options, lists, Layout { level: 1, standalone: true })
+}
+
+fn render_with(group: &Group, options: &Options, lists: &Lists, layout: Layout) -> Exported {
     let l = labels(options.lang);
     let mut masked = 0usize;
     let mut hide = |text: &str| -> String {
@@ -282,26 +303,29 @@ pub fn render(group: &Group, options: &Options, lists: &Lists) -> Exported {
         }
     };
 
-    let messages = group.items.iter().filter(|i| matches!(i, Item::Message { .. })).count();
-    let calls = group.items.len() - messages;
-    let first = group.items.first().map(Item::at).unwrap_or_default();
-    let last = group.items.last().map(Item::at).unwrap_or_default();
+    let items: Vec<&Item> = group.items.iter().filter(|i| options.include_calls || matches!(i, Item::Message { .. })).collect();
+    let messages = items.iter().filter(|i| matches!(i, Item::Message { .. })).count();
+    let calls = items.len() - messages;
+    let first = items.first().map(|i| i.at()).unwrap_or_default();
+    let last = items.last().map(|i| i.at()).unwrap_or_default();
     let tz = offset_label(options.utc_offset_minutes);
+    let title_marks = "#".repeat(layout.level);
+    let speaker_marks = "#".repeat(layout.level + 1);
 
     // 本文を先に作る(伏せた件数を、冒頭に書くため)
     let mut body = String::new();
     let mut index = 0;
-    while index < group.items.len() {
-        match &group.items[index] {
+    while index < items.len() {
+        match items[index] {
             Item::Message { at, role, content } => {
                 let who = if role.eq_ignore_ascii_case("user") { l.you } else { l.ai };
-                body.push_str(&format!("## {who} ({})\n\n{}\n\n", format_time(at, options.utc_offset_minutes), hide(content).trim_end()));
+                body.push_str(&format!("{speaker_marks} {who} ({})\n\n{}\n\n", format_time(at, options.utc_offset_minutes), hide(content).trim_end()));
                 index += 1;
             }
             Item::Call { .. } => {
                 // 続く呼び出しを、1 つの一覧にまとめる
                 body.push_str(&format!("**{}**\n\n", l.ran));
-                while let Some(Item::Call { name, detail, exit_code, .. }) = group.items.get(index) {
+                while let Some(Item::Call { name, detail, exit_code, .. }) = items.get(index).copied() {
                     let detail = hide(detail);
                     let exit = exit_code.filter(|code| *code != 0).map(|code| format!(" ({} {code})", l.exit_code)).unwrap_or_default();
                     if detail.contains('\n') {
@@ -320,7 +344,7 @@ pub fn render(group: &Group, options: &Options, lists: &Lists) -> Exported {
 
     let title = hide(&group.title);
     let project = hide(&group.project_path);
-    let mut head = format!("# {}\n\n", title.replace('\n', " ").trim());
+    let mut head = format!("{title_marks} {}\n\n", title.replace('\n', " ").trim());
     head.push_str(&format!("- {}: {} 〜 {} ({tz})\n", l.when, format_time(first, options.utc_offset_minutes), format_time(last, options.utc_offset_minutes)));
     head.push_str(&format!("- {}: {}\n", l.source, tool_label(&group.source_tool)));
     head.push_str(&format!("- {}: {}\n", l.project, code_span(&project)));
@@ -328,15 +352,111 @@ pub fn render(group: &Group, options: &Options, lists: &Lists) -> Exported {
         Lang::Ja => format!("- {}: 発言 {messages} 件 / 実行 {calls} 件\n", l.counts),
         Lang::En => format!("- {}: {messages} messages / {calls} tool calls\n", l.counts),
     });
+    if layout.standalone {
+        head.push_str(&format!("\n{}\n", l.not_included));
+        if masked > 0 {
+            head.push_str(&format!("{}\n", (l.masked_note)(masked)));
+        }
+        head.push_str("\n---\n\n");
+    } else {
+        head.push('\n');
+    }
+
+    // 依頼文は、先頭に置く(貼った先の AI が、先に何を頼まれているかを読むため)。区切り線で、記録と分ける
+    let request = if layout.standalone { options.prompt.text(options.lang).map(|text| format!("{text}\n\n---\n\n")).unwrap_or_default() } else { String::new() };
+    Exported { markdown: format!("{request}{head}{}", body.trim_end().to_owned() + "\n"), masked, messages, calls, sections: 1, total_sections: 1, truncated: false }
+}
+
+/// 話題(区切り)を、1 つの書き出しにまとめる上限。長い会話を何件も貼ると、貼り付け先の上限を超えるため。
+pub const MAX_SECTIONS: usize = 50;
+/// 範囲に当たる発言を、集める上限(新しいほうから)。これに達したら、古い話題が欠けているかもしれない。
+const MAX_EVENTS: usize = 20_000;
+
+/// 書き出す範囲。日付は `timeline` と同じ形(UTC の境界。`date_to` は含まない)。`label` は、書き出しの冒頭に書く範囲の説明(画面が作る)。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Range<'a> {
+    pub date_from: Option<&'a str>,
+    pub date_to: Option<&'a str>,
+    pub project: Option<&'a str>,
+    pub query: Option<&'a str>,
+    pub label: Option<&'a str>,
+}
+
+/// 範囲に当たる話題(区切り)を、時系列(古い → 新しい)に並べて、1 つの Markdown にする。
+/// 1 つの話題は、`section_markdown` と同じ書き方で、見出しの深さだけが違う(`##`)。話題の全体を書き出すので、範囲の端をまたぐ話題は、範囲の外の発言も含む。
+/// 話題は、新しいほうから `MAX_SECTIONS` 件まで。依頼文(`options.prompt`)は、全体の先頭に 1 回だけ付く。
+pub fn range_markdown(conn: &Connection, range: &Range, options: &Options) -> Result<Exported> {
+    let events = crate::db::timeline_in_project(conn, range.date_from, range.date_to, range.project, range.query, MAX_EVENTS, crate::db::SearchOrder::Newest)?;
+    // 当たった発言(新しい順)から、話題を新しい順に拾う
+    let mut seen = std::collections::HashSet::new();
+    let mut starts: Vec<i64> = Vec::new();
+    for e in &events {
+        if seen.insert((e.session_id, e.section_start.unwrap_or(e.event_id))) {
+            starts.push(e.event_id);
+        }
+    }
+    if starts.is_empty() {
+        anyhow::bail!("書き出す発言がありません(条件に当たる記録がありません)");
+    }
+    let total = starts.len();
+    let truncated = total > MAX_SECTIONS || events.len() >= MAX_EVENTS;
+    starts.truncate(MAX_SECTIONS);
+    starts.reverse(); // 読むときは、古いものから
+
+    let lists = Lists::load_beside(conn);
+    let section_options = Options { prompt: Prompt::None, ..*options };
+    let layout = Layout { level: 2, standalone: false };
+    let (mut masked, mut messages, mut calls) = (0, 0, 0);
+    let mut body = String::new();
+    for event_id in &starts {
+        let group = section_group(conn, *event_id)?;
+        let one = render_with(&group, &section_options, &lists, layout);
+        masked += one.masked;
+        messages += one.messages;
+        calls += one.calls;
+        body.push_str(&one.markdown);
+        body.push('\n');
+    }
+
+    // 冒頭: 範囲の説明・件数・注意書き(1 回だけ)
+    let l = labels(options.lang);
+    let mut hide = |text: &str| -> String {
+        match options.secrets {
+            Secrets::Keep => text.to_string(),
+            Secrets::Mask => {
+                let result = mask::mask_with(text, &lists);
+                masked += result.count();
+                result.text
+            }
+        }
+    };
+    let label = range.label.map(|text| hide(text).replace('\n', " ").trim().to_owned()).filter(|t| !t.is_empty());
+    let shown = starts.len();
+    let more = if events.len() >= MAX_EVENTS { "以上" } else { "" };
+    let mut head = String::from(match options.lang {
+        Lang::Ja => "# 会話の書き出し\n\n",
+        Lang::En => "# Conversation export\n\n",
+    });
+    if let Some(label) = &label {
+        head.push_str(&format!("- {}: {label}\n", match options.lang { Lang::Ja => "範囲", Lang::En => "Range" }));
+    }
+    head.push_str(&match options.lang {
+        Lang::Ja => format!("- 話題: {shown} 件 / 発言 {messages} 件 / 実行 {calls} 件\n"),
+        Lang::En => format!("- Topics: {shown} / {messages} messages / {calls} tool calls\n"),
+    });
+    if truncated {
+        head.push_str(&match options.lang {
+            Lang::Ja => format!("- 該当する話題は {total} 件{more}あるので、新しい {shown} 件だけを書き出しました(上限 {MAX_SECTIONS} 件)\n"),
+            Lang::En => format!("- {total}{} topics matched; only the newest {shown} are included (limit {MAX_SECTIONS})\n", if more.is_empty() { "" } else { "+" }),
+        });
+    }
     head.push_str(&format!("\n{}\n", l.not_included));
     if masked > 0 {
         head.push_str(&format!("{}\n", (l.masked_note)(masked)));
     }
     head.push_str("\n---\n\n");
-
-    // 依頼文は、先頭に置く(貼った先の AI が、先に何を頼まれているかを読むため)。区切り線で、記録と分ける
     let request = options.prompt.text(options.lang).map(|text| format!("{text}\n\n---\n\n")).unwrap_or_default();
-    Exported { markdown: format!("{request}{head}{}", body.trim_end().to_owned() + "\n"), masked, messages, calls }
+    Ok(Exported { markdown: format!("{request}{head}{}", body.trim_end().to_owned() + "\n"), masked, messages, calls, sections: shown, total_sections: total, truncated })
 }
 
 #[cfg(test)]
@@ -450,7 +570,7 @@ mod tests {
     #[test]
     fn english_labels_and_the_utc_offset_are_applied() {
         let (conn, ids, _) = two_sections();
-        let out = section_markdown(&conn, ids[0], &Options { secrets: Secrets::Mask, lang: Lang::En, prompt: Prompt::None, utc_offset_minutes: 540 }).unwrap();
+        let out = section_markdown(&conn, ids[0], &Options { secrets: Secrets::Mask, lang: Lang::En, prompt: Prompt::None, include_calls: true, utc_offset_minutes: 540 }).unwrap();
         let md = &out.markdown;
         assert!(md.contains("- When: 2026-10-20 10:00 〜 2026-10-20 10:02 (UTC+09:00)"), "{md}");
         assert!(md.contains("## You (2026-10-20 10:00)") && md.contains("## AI (2026-10-20 10:02)") && md.contains("**Ran**"), "{md}");
@@ -486,6 +606,62 @@ mod tests {
         assert_eq!(Prompt::parse("review"), Some(Prompt::Review));
         assert_eq!(Prompt::parse("Summarize"), None);
         assert_eq!(Prompt::parse("やって"), None);
+    }
+
+    #[test]
+    fn a_range_is_written_as_one_document_with_the_sections_oldest_first() {
+        let (conn, _, _) = two_sections();
+        let out = range_markdown(&conn, &Range { label: Some("2026-10-20 〜 2026-10-21"), ..Range::default() }, &Options::default()).unwrap();
+        let md = &out.markdown;
+        assert!(md.starts_with("# 会話の書き出し\n"), "{md}");
+        assert!(md.contains("- 範囲: 2026-10-20 〜 2026-10-21") && md.contains("- 話題: 2 件 / 発言 3 件 / 実行 4 件"), "{md}");
+        assert_eq!((out.sections, out.total_sections, out.truncated), (2, 2, false));
+        // 話題は `##`、発言は `###`。古い話題が先
+        assert_eq!(md.matches("\n## 会話全体の題名\n").count(), 2, "{md}");
+        assert!(md.contains("\n### あなた (") && md.find("ビルドが通らない").unwrap() < md.find("次の話題です").unwrap(), "{md}");
+        // 注意書きは、冒頭に 1 回だけ
+        let note = labels(Lang::Ja).not_included;
+        assert_eq!(md.matches(note).count(), 1, "{md}");
+    }
+
+    #[test]
+    fn a_range_can_leave_out_the_tool_calls_and_be_narrowed_by_query_and_dates() {
+        let (conn, _, _) = two_sections();
+        let no_calls = range_markdown(&conn, &Range::default(), &Options { include_calls: false, ..Options::default() }).unwrap();
+        assert_eq!((no_calls.calls, no_calls.messages), (0, 3));
+        assert!(!no_calls.markdown.contains(labels(Lang::Ja).ran) && !no_calls.markdown.contains("npm run build"), "{}", no_calls.markdown);
+        let with_calls = range_markdown(&conn, &Range::default(), &Options::default()).unwrap();
+        assert_eq!(with_calls.calls, 4);
+        // 検索語: 当たった発言を含む話題だけ
+        let hit = range_markdown(&conn, &Range { query: Some("次の話題"), ..Range::default() }, &Options::default()).unwrap();
+        assert_eq!(hit.sections, 1);
+        assert!(hit.markdown.contains("次の話題です") && !hit.markdown.contains("ビルドが通らない"), "{}", hit.markdown);
+        // 日付(UTC の境界。後半の話題は 03:00)
+        let late = range_markdown(&conn, &Range { date_from: Some("2026-10-20T02:00:00"), ..Range::default() }, &Options::default()).unwrap();
+        assert_eq!(late.sections, 1);
+        assert!(late.markdown.contains("次の話題です") && !late.markdown.contains("ビルドが通らない"));
+        // 何も当たらないときは、断る
+        assert!(range_markdown(&conn, &Range { project: Some("/nothing"), ..Range::default() }, &Options::default()).is_err());
+        assert!(range_markdown(&conn, &Range { query: Some("存在しない言葉"), ..Range::default() }, &Options::default()).is_err());
+    }
+
+    #[test]
+    fn a_range_puts_the_request_once_at_the_top_and_keeps_only_the_newest_sections_over_the_limit() {
+        let conn = db::open_memory().unwrap();
+        // 1 時間おきの発言 60 件 = 60 の話題(30 分以上あくと、区切りになる)
+        let owned: Vec<(String, String, String)> = (0..60).map(|i| (format!("2026-09-{:02}T{:02}:00:00.000Z", 1 + i / 24, i % 24), "user".to_string(), format!("t{i:04}"))).collect();
+        let msgs: Vec<(&str, &str, &str)> = owned.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+        session(&conn, &msgs);
+        let out = range_markdown(&conn, &Range::default(), &Options { prompt: Prompt::Summarize, ..Options::default() }).unwrap();
+        let md = &out.markdown;
+        assert_eq!((out.sections, out.total_sections, out.truncated), (MAX_SECTIONS, 60, true));
+        assert!(md.contains("該当する話題は 60 件あるので、新しい 50 件だけを書き出しました"), "{md}");
+        // 新しい 50 件(t0010〜t0059)だけ。古い話題が欠ける。読むときは古いほうから
+        assert!(md.contains("t0010") && md.contains("t0059") && !md.contains("t0009"));
+        assert!(md.find("t0010").unwrap() < md.find("t0059").unwrap());
+        // 依頼文は、全体の先頭に 1 回だけ
+        assert!(md.starts_with("以下は、AI との会話の記録です。"), "{md}");
+        assert_eq!(md.matches("要点を").count(), 1);
     }
 
     #[test]

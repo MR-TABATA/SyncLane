@@ -156,6 +156,8 @@
     .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .export-panel .opt-row { margin-top: 10px; align-items: center; }
     .export-prompt { margin: 10px 0; gap: 4px; }
+    .export-calls { display: flex; gap: 8px; margin: 0 0 10px; font-size: 13px; cursor: pointer; }
+    .export-calls input { margin: 0; }
     .export-prompt select { max-width: 320px; }
     .title-panel { width: min(520px, calc(100vw - 48px)); padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .title-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
@@ -234,6 +236,7 @@
         <div class="field"><label for="filter-to" data-i18n="to">終了</label><input id="filter-to" type="date" /></div>
         <button id="filter-apply" class="primary" type="button" data-i18n="show">表示</button>
         <button id="filter-clear" type="button" data-i18n="clear">クリア</button>
+        <button id="range-export" type="button" data-i18n="rangeExportBtn" title="いま表示している範囲を、Markdown にしてコピーします">この範囲を Markdown でコピー</button>
       </div>
       <div id="timeline"><div class="empty" data-i18n="loading">読み込み中…</div></div>
     </section>
@@ -257,7 +260,7 @@
   <div id="export-overlay" class="overlay" hidden>
     <div class="export-panel" role="dialog" aria-labelledby="export-heading">
       <h2 id="export-heading" data-i18n="exportHeading">この話題を Markdown でコピー</h2>
-      <p class="note" data-i18n="exportScope">この話題の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。</p>
+      <p id="export-scope" class="note" data-i18n="exportScope">この話題の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。</p>
       <div class="field export-prompt">
         <label for="export-prompt" data-i18n="exportPromptLabel">先頭に付ける依頼文</label>
         <select id="export-prompt">
@@ -268,6 +271,7 @@
         </select>
         <span class="note" data-i18n="exportPromptNote">選んだ依頼文が、書き出しの先頭に入ります。貼り付けるだけで、別の AI に頼めます（SyncLane は、AI を呼びません）。</span>
       </div>
+      <label class="opt-row export-calls"><input id="export-calls" type="checkbox" checked><span data-i18n="exportCalls">実行したコマンド・触ったファイルも書き出す</span></label>
       <div class="sync-radios">
         <label class="sync-radio"><input id="export-mask" type="radio" name="export-secrets" checked><span><span data-i18n="exportMask">秘密に見えるものを伏せる（おすすめ）</span><span class="sync-radio-note" data-i18n="exportMaskNote">API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。</span></span></label>
         <label class="sync-radio"><input id="export-keep" type="radio" name="export-secrets"><span><span data-i18n="exportKeep">そのままコピー</span><span id="export-keep-warn" class="sync-radio-note" data-i18n="exportKeepWarn" hidden>パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。</span></span></label>
@@ -367,6 +371,11 @@
         exportScope: 'この話題（前の発言と 30 分以上あいた位置などで区切った、ひとまとまり）の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。',
         exportMask: '秘密に見えるものを伏せる（おすすめ）', exportMaskNote: 'API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。',
         exportKeep: 'そのままコピー', exportKeepWarn: 'パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。',
+        rangeExportBtn: 'この範囲を Markdown でコピー', rangeExportHeading: '表示中の範囲を Markdown でコピー',
+        rangeExportScope: 'いま表示している範囲（日付・プロジェクト・検索語）に当たる話題を、古いものから順に書き出します。話題の全体を書き出すので、範囲の端をまたぐ話題は、範囲の外の発言も含みます。新しい 50 件までです。',
+        exportCalls: '実行したコマンド・触ったファイルも書き出す',
+        exportInfoRange: (s, total, m, c, x, chars, keep, truncated) => `話題 ${s} 件 / 発言 ${m} 件 / 実行 ${c} 件 / 約 ${chars.toLocaleString('ja-JP')} 文字。${truncated ? `該当は ${total} 件のため、新しい ${s} 件だけです。` : ''}${keep ? '秘密に見えるものも、そのまま入ります。' : `秘密に見えるものを ${x} 件、伏せました。`}`,
+        rangeAllDates: 'すべての期間', rangeProject: (n) => `プロジェクト: ${n}`, rangeQuery: (q) => `検索: ${q}`,
         exportPromptLabel: '先頭に付ける依頼文', exportPromptNone: '付けない（記録として）', exportPromptSummarize: '要約して', exportPromptContinue: '続きから作業して', exportPromptReview: '別の視点で評価して',
         exportPromptNote: '選んだ依頼文が、書き出しの先頭に入ります。貼り付けるだけで、別の AI に頼めます（SyncLane は、AI を呼びません）。',
         exportCopy: 'コピー', exportCopied: 'コピーしました', exportFailed: (e) => `できませんでした: ${e}`,
@@ -397,6 +406,11 @@
         exportScope: 'Writes out this topic (a stretch of the conversation, split where there was a gap of 30 minutes or more and so on): your messages and the AI\'s, plus the commands that were run and the files that were touched. Tool output and the AI\'s reasoning are not saved, so they are not included.',
         exportMask: 'Mask anything that looks like a secret (recommended)', exportMaskNote: 'Masks API keys, tokens, passwords and the like. It is the same processing used before sending to a server, and “Always mask” words apply too.',
         exportKeep: 'Copy as is', exportKeepWarn: 'It may contain passwords or keys. Check where you paste it.',
+        rangeExportBtn: 'Copy this range as Markdown', rangeExportHeading: 'Copy the range on screen as Markdown',
+        rangeExportScope: 'Writes the topics that match the range on screen (dates, project, search words), oldest first. Each topic is included in full, so a topic that crosses the edge of the range also has messages from outside it. Up to the newest 50 topics.',
+        exportCalls: 'Include the commands run and files touched',
+        exportInfoRange: (s, total, m, c, x, chars, keep, truncated) => `${s} topics / ${m} messages / ${c} tool calls / about ${chars.toLocaleString('en-US')} characters. ${truncated ? `${total} matched, so only the newest ${s} are included. ` : ''}${keep ? 'Anything that looks like a secret is included as is.' : `${x} things that look like secrets were masked.`}`,
+        rangeAllDates: 'All dates', rangeProject: (n) => `Project: ${n}`, rangeQuery: (q) => `Search: ${q}`,
         exportPromptLabel: 'Request to put first', exportPromptNone: 'None (as a record)', exportPromptSummarize: 'Summarize this', exportPromptContinue: 'Continue the work', exportPromptReview: 'Review from another point of view',
         exportPromptNote: 'The request you choose goes at the top of the export, so you can just paste it to another AI (SyncLane does not call any AI).',
         exportCopy: 'Copy', exportCopied: 'Copied', exportFailed: (e) => `Failed: ${e}`,
@@ -733,7 +747,8 @@
       } catch (error) { $('title-status').textContent = t('titleFailed', error); }
     });
     // ---- 話題を Markdown でコピー(書き出しの本体は Rust。ここでは、見本を出して、クリップボードに入れる) ----
-    let exportingEvent = null;
+    let exportingEvent = null; // 話題 1 つの書き出しのとき、その話題の発言
+    let exportingRange = null; // 範囲の書き出しのとき、その条件(画面に出ている範囲)
     let exportSeq = 0;
     const EXPORT_KEEP_KEY = 'synclane-export-keep-secrets';
     const EXPORT_PROMPT_KEY = 'synclane-export-prompt';
@@ -742,17 +757,22 @@
     function exportKeepSaved() { try { return localStorage.getItem(EXPORT_KEEP_KEY) === '1'; } catch (_) { return false; } }
     function exportKeepSave(keep) { try { localStorage.setItem(EXPORT_KEEP_KEY, keep ? '1' : '0'); } catch (_) {} }
     async function refreshExport() {
-      if (exportingEvent === null) return;
+      if (exportingEvent === null && exportingRange === null) return;
       const seq = ++exportSeq; // 続けて切り替えたとき、古い結果で上書きしない
       const keep = $('export-keep').checked;
       $('export-keep-warn').hidden = !keep;
       $('export-status').textContent = '';
       $('export-copy').disabled = true;
       try {
-        const result = await invoke('export_section', { eventId: exportingEvent, keepSecrets: keep, lang: resolvedLang(), utcOffsetMinutes: -new Date().getTimezoneOffset(), prompt: $('export-prompt').value });
+        const common = { keepSecrets: keep, lang: resolvedLang(), utcOffsetMinutes: -new Date().getTimezoneOffset(), prompt: $('export-prompt').value, includeCalls: $('export-calls').checked };
+        const result = exportingRange === null
+          ? await invoke('export_section', { eventId: exportingEvent, ...common })
+          : await invoke('export_range', { ...exportingRange, ...common });
         if (seq !== exportSeq) return;
         $('export-preview').value = result.markdown;
-        $('export-info').textContent = t('exportInfo', result.messages, result.calls, result.masked, keep);
+        $('export-info').textContent = exportingRange === null
+          ? t('exportInfo', result.messages, result.calls, result.masked, keep)
+          : t('exportInfoRange', result.sections, result.total_sections, result.messages, result.calls, result.masked, result.markdown.length, keep, result.truncated);
         $('export-copy').disabled = false;
       } catch (error) {
         if (seq !== exportSeq) return;
@@ -761,8 +781,19 @@
         $('export-status').textContent = t('exportFailed', error);
       }
     }
+    // ダイアログの見出しと説明を、話題 1 つ／範囲のどちらかに合わせる
+    function setExportMode(range) {
+      $('export-heading').dataset.i18n = range ? 'rangeExportHeading' : 'exportHeading';
+      $('export-heading').textContent = t(range ? 'rangeExportHeading' : 'exportHeading');
+      $('export-scope').dataset.i18n = range ? 'rangeExportScope' : 'exportScope';
+      $('export-scope').textContent = t(range ? 'rangeExportScope' : 'exportScope');
+      // 実行したコマンドは、話題 1 つなら含めるのが既定。範囲は、長くなるので、含めないのが既定
+      $('export-calls').checked = !range;
+    }
     function openExport(eventId) {
       exportingEvent = eventId;
+      exportingRange = null;
+      setExportMode(false);
       const keep = exportKeepSaved();
       $('export-keep').checked = keep;
       $('export-mask').checked = !keep;
@@ -772,7 +803,32 @@
       $('export-overlay').hidden = false;
       refreshExport();
     }
-    function closeExport() { $('export-overlay').hidden = true; exportingEvent = null; exportSeq++; }
+    // いま一覧に出している範囲(load() と同じ条件)を、書き出す
+    function openRangeExport() {
+      const bySearch = searchActive;
+      const dates = bySearch ? searchDates() : mainDates();
+      const query = bySearch ? ($('query').value || null) : null;
+      const project = sidebarProjects.find((p) => p.project_path === activeProject);
+      const parts = [];
+      if (dates.from || dates.to) parts.push(`${dates.from ? localDate(new Date(dates.from)) : ''} 〜 ${dates.to ? localDate(new Date(new Date(dates.to).getTime() - 1)) : ''}`);
+      else parts.push(t('rangeAllDates'));
+      if (activeProject) parts.push(t('rangeProject', project ? project.name : activeProject));
+      if (query) parts.push(t('rangeQuery', query));
+      exportingEvent = null;
+      exportingRange = { dateFrom: dates.from, dateTo: dates.to, project: activeProject, query, label: parts.join(' / ') };
+      setExportMode(true);
+      const keep = exportKeepSaved();
+      $('export-keep').checked = keep;
+      $('export-mask').checked = !keep;
+      $('export-prompt').value = exportPromptSaved();
+      $('export-preview').value = '';
+      $('export-info').textContent = '';
+      $('export-overlay').hidden = false;
+      refreshExport();
+    }
+    $('range-export').addEventListener('click', openRangeExport);
+    $('export-calls').addEventListener('change', refreshExport);
+    function closeExport() { $('export-overlay').hidden = true; exportingEvent = null; exportingRange = null; exportSeq++; }
     $('export-mask').addEventListener('change', () => { exportKeepSave(false); refreshExport(); });
     $('export-keep').addEventListener('change', () => { exportKeepSave(true); refreshExport(); });
     $('export-prompt').addEventListener('change', () => { exportPromptSave($('export-prompt').value); refreshExport(); });
