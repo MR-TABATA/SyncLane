@@ -5,6 +5,7 @@
 //!   **ツールの実行結果と AI の思考は、保存していないので含まれない。**
 //! - 秘密に見えるもの(API キー・トークン・パスワードなど)は、既定で伏せる(サーバーに送るときと同じ処理。`sync/mask.rs`)。
 //!   `Secrets::Keep` なら、そのまま書き出す。伏せた件数は、返り値に入る。
+//! - 先頭に、別の AI への依頼文を付けられる(`Prompt`)。貼り付けるだけで頼めるようにするため。SyncLane は AI を呼ばない(コピーするだけ)。
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -26,17 +27,57 @@ pub enum Lang {
     En,
 }
 
+/// 書き出しの先頭に付ける、別の AI への依頼文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prompt {
+    /// 付けない(記録として残す・そのまま貼る)
+    None,
+    /// 要点を、決まったこと・決まっていないこと・次にやることに分けて、まとめてもらう
+    Summarize,
+    /// この続きから、作業してもらう
+    Continue,
+    /// 別の視点から、評価してもらう(セカンドオピニオン)
+    Review,
+}
+
+impl Prompt {
+    /// 画面から渡される名前から。空・`none` は、付けない。知らない名前は None(呼び出し側が、断る)。
+    pub fn parse(name: &str) -> Option<Prompt> {
+        match name.trim() {
+            "" | "none" => Some(Prompt::None),
+            "summarize" => Some(Prompt::Summarize),
+            "continue" => Some(Prompt::Continue),
+            "review" => Some(Prompt::Review),
+            _ => None,
+        }
+    }
+
+    fn text(self, lang: Lang) -> Option<&'static str> {
+        match (self, lang) {
+            (Prompt::None, _) => None,
+            (Prompt::Summarize, Lang::Ja) => Some("以下は、AI との会話の記録です。要点を、「決まったこと」「まだ決まっていないこと」「次にやること」に分けて、簡潔にまとめてください。記録にないことは、書き足さないでください。"),
+            (Prompt::Continue, Lang::Ja) => Some("以下は、これまでの作業の記録です。この続きから作業してください。最初に、いまの状況と、残っていることを短く確認してから、始めてください。"),
+            (Prompt::Review, Lang::Ja) => Some("以下は、別の AI との会話の記録です。別の視点から評価してください。見落としている点、前提が弱い点、ほかの選び方があればそれも、理由つきで挙げてください。"),
+            (Prompt::Summarize, Lang::En) => Some("Below is a record of a conversation with an AI. Summarize it briefly under three headings: \"Decided\", \"Still open\" and \"Next steps\". Do not add anything that is not in the record."),
+            (Prompt::Continue, Lang::En) => Some("Below is a record of the work so far. Continue the work from here. First, briefly confirm the current state and what remains, then start."),
+            (Prompt::Review, Lang::En) => Some("Below is a record of a conversation with another AI. Evaluate it from a different point of view. Point out anything overlooked, weak assumptions, and other options worth considering, with reasons."),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub secrets: Secrets,
     pub lang: Lang,
+    /// 先頭に付ける依頼文
+    pub prompt: Prompt,
     /// 時刻を表示するときの、UTC からのずれ(分)。画面は、使っている端末のずれを渡す
     pub utc_offset_minutes: i32,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { secrets: Secrets::Mask, lang: Lang::Ja, utc_offset_minutes: 0 }
+        Options { secrets: Secrets::Mask, lang: Lang::Ja, prompt: Prompt::None, utc_offset_minutes: 0 }
     }
 }
 
@@ -293,7 +334,9 @@ pub fn render(group: &Group, options: &Options, lists: &Lists) -> Exported {
     }
     head.push_str("\n---\n\n");
 
-    Exported { markdown: format!("{head}{}", body.trim_end().to_owned() + "\n"), masked, messages, calls }
+    // 依頼文は、先頭に置く(貼った先の AI が、先に何を頼まれているかを読むため)。区切り線で、記録と分ける
+    let request = options.prompt.text(options.lang).map(|text| format!("{text}\n\n---\n\n")).unwrap_or_default();
+    Exported { markdown: format!("{request}{head}{}", body.trim_end().to_owned() + "\n"), masked, messages, calls }
 }
 
 #[cfg(test)]
@@ -407,12 +450,42 @@ mod tests {
     #[test]
     fn english_labels_and_the_utc_offset_are_applied() {
         let (conn, ids, _) = two_sections();
-        let out = section_markdown(&conn, ids[0], &Options { secrets: Secrets::Mask, lang: Lang::En, utc_offset_minutes: 540 }).unwrap();
+        let out = section_markdown(&conn, ids[0], &Options { secrets: Secrets::Mask, lang: Lang::En, prompt: Prompt::None, utc_offset_minutes: 540 }).unwrap();
         let md = &out.markdown;
         assert!(md.contains("- When: 2026-10-20 10:00 〜 2026-10-20 10:02 (UTC+09:00)"), "{md}");
         assert!(md.contains("## You (2026-10-20 10:00)") && md.contains("## AI (2026-10-20 10:02)") && md.contains("**Ran**"), "{md}");
         assert!(md.contains("2 messages / 3 tool calls") && md.contains("(exit code 1)") && md.contains("not saved"), "{md}");
         assert_eq!(offset_label(-330), "UTC-05:30");
+    }
+
+    #[test]
+    fn a_request_is_put_first_and_separated_from_the_record() {
+        let (conn, ids, _) = two_sections();
+        let plain = section_markdown(&conn, ids[0], &Options::default()).unwrap();
+        assert!(plain.markdown.starts_with("# "), "依頼文なしは、いままでと同じ");
+        for (prompt, needle) in [(Prompt::Summarize, "要点を"), (Prompt::Continue, "この続きから作業してください"), (Prompt::Review, "別の視点から評価してください")] {
+            let out = section_markdown(&conn, ids[0], &Options { prompt, ..Options::default() }).unwrap();
+            let (request, record) = out.markdown.split_once("\n\n---\n\n").unwrap();
+            assert!(request.contains(needle), "{request}");
+            assert!(!request.contains('\n'), "依頼文は 1 段落: {request}");
+            // 記録の部分は、依頼文なしと同じ(伏せた件数・発言の数も変わらない)
+            assert!(record.starts_with("# ") && out.markdown.ends_with(plain.markdown.rsplit_once("\n\n---\n\n").unwrap().1), "{}", out.markdown);
+            assert_eq!((out.masked, out.messages, out.calls), (plain.masked, plain.messages, plain.calls));
+        }
+    }
+
+    #[test]
+    fn requests_follow_the_language_and_the_names_are_parsed_strictly() {
+        let (conn, ids, _) = two_sections();
+        let en = section_markdown(&conn, ids[0], &Options { lang: Lang::En, prompt: Prompt::Review, ..Options::default() }).unwrap();
+        assert!(en.markdown.starts_with("Below is a record of a conversation with another AI. Evaluate it"), "{}", en.markdown);
+        assert_eq!(Prompt::parse(""), Some(Prompt::None));
+        assert_eq!(Prompt::parse("none"), Some(Prompt::None));
+        assert_eq!(Prompt::parse(" summarize "), Some(Prompt::Summarize));
+        assert_eq!(Prompt::parse("continue"), Some(Prompt::Continue));
+        assert_eq!(Prompt::parse("review"), Some(Prompt::Review));
+        assert_eq!(Prompt::parse("Summarize"), None);
+        assert_eq!(Prompt::parse("やって"), None);
     }
 
     #[test]

@@ -72,16 +72,23 @@ fn section_title_suggest(event_id: i64, state: tauri::State<'_, AppState>) -> Re
 
 /// 指した発言が属する区切りを、Markdown にする(コピーする前の見本にも、そのまま使う)。外には何も送らない。
 /// `keep_secrets` が true なら、秘密に見えるものも、そのまま書き出す(既定は、伏せる)。`utc_offset_minutes` は、画面の端末の時差。
+/// `prompt` は、先頭に付ける別の AI への依頼文(`summarize` / `continue` / `review`。空・`none` は付けない)。知らない名前は、断る。
 #[tauri::command]
 fn export_section(
     event_id: i64,
     keep_secrets: bool,
     lang: String,
     utc_offset_minutes: i32,
+    prompt: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<synclane::export::Exported, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let prompt = match prompt.as_deref() {
+        None => synclane::export::Prompt::None,
+        Some(name) => synclane::export::Prompt::parse(name).ok_or_else(|| format!("知らない依頼文です: {name}"))?,
+    };
     let options = synclane::export::Options {
+        prompt,
         secrets: if keep_secrets { synclane::export::Secrets::Keep } else { synclane::export::Secrets::Mask },
         lang: if lang == "ja" { synclane::export::Lang::Ja } else { synclane::export::Lang::En },
         utc_offset_minutes,

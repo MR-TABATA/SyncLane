@@ -155,6 +155,8 @@
     .export-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
     .export-preview { width: 100%; box-sizing: border-box; height: 280px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); background: var(--input-bg); resize: vertical; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .export-panel .opt-row { margin-top: 10px; align-items: center; }
+    .export-prompt { margin: 10px 0; gap: 4px; }
+    .export-prompt select { max-width: 320px; }
     .title-panel { width: min(520px, calc(100vw - 48px)); padding: 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .title-panel h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
     .title-panel input[type="text"] { width: 100%; box-sizing: border-box; }
@@ -256,6 +258,16 @@
     <div class="export-panel" role="dialog" aria-labelledby="export-heading">
       <h2 id="export-heading" data-i18n="exportHeading">この話題を Markdown でコピー</h2>
       <p class="note" data-i18n="exportScope">この話題の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。</p>
+      <div class="field export-prompt">
+        <label for="export-prompt" data-i18n="exportPromptLabel">先頭に付ける依頼文</label>
+        <select id="export-prompt">
+          <option value="none" data-i18n="exportPromptNone">付けない（記録として）</option>
+          <option value="summarize" data-i18n="exportPromptSummarize">要約して</option>
+          <option value="continue" data-i18n="exportPromptContinue">続きから作業して</option>
+          <option value="review" data-i18n="exportPromptReview">別の視点で評価して</option>
+        </select>
+        <span class="note" data-i18n="exportPromptNote">選んだ依頼文が、書き出しの先頭に入ります。貼り付けるだけで、別の AI に頼めます（SyncLane は、AI を呼びません）。</span>
+      </div>
       <div class="sync-radios">
         <label class="sync-radio"><input id="export-mask" type="radio" name="export-secrets" checked><span><span data-i18n="exportMask">秘密に見えるものを伏せる（おすすめ）</span><span class="sync-radio-note" data-i18n="exportMaskNote">API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。</span></span></label>
         <label class="sync-radio"><input id="export-keep" type="radio" name="export-secrets"><span><span data-i18n="exportKeep">そのままコピー</span><span id="export-keep-warn" class="sync-radio-note" data-i18n="exportKeepWarn" hidden>パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。</span></span></label>
@@ -355,6 +367,8 @@
         exportScope: 'この話題（前の発言と 30 分以上あいた位置などで区切った、ひとまとまり）の、あなたと AI の発言と、実行したコマンド・触ったファイルを書き出します。ツールの実行結果と、AI の思考は、保存していないので、含まれません。',
         exportMask: '秘密に見えるものを伏せる（おすすめ）', exportMaskNote: 'API キー・トークン・パスワードなどを伏せます。サーバーへ送るときと同じ処理で、「必ず伏せる語」も効きます。',
         exportKeep: 'そのままコピー', exportKeepWarn: 'パスワードやキーが含まれているかもしれません。貼り付け先を確認してください。',
+        exportPromptLabel: '先頭に付ける依頼文', exportPromptNone: '付けない（記録として）', exportPromptSummarize: '要約して', exportPromptContinue: '続きから作業して', exportPromptReview: '別の視点で評価して',
+        exportPromptNote: '選んだ依頼文が、書き出しの先頭に入ります。貼り付けるだけで、別の AI に頼めます（SyncLane は、AI を呼びません）。',
         exportCopy: 'コピー', exportCopied: 'コピーしました', exportFailed: (e) => `できませんでした: ${e}`,
         exportInfo: (m, c, x, keep) => keep ? `発言 ${m} 件 / 実行 ${c} 件。秘密に見えるものも、そのまま入ります。` : `発言 ${m} 件 / 実行 ${c} 件。秘密に見えるものを ${x} 件、伏せました。`,
         navMask: '秘密の伏せ方', maskBlock: '必ず伏せる語', maskAllow: '伏せなくてよい値', maskSave: '保存',
@@ -383,6 +397,8 @@
         exportScope: 'Writes out this topic (a stretch of the conversation, split where there was a gap of 30 minutes or more and so on): your messages and the AI\'s, plus the commands that were run and the files that were touched. Tool output and the AI\'s reasoning are not saved, so they are not included.',
         exportMask: 'Mask anything that looks like a secret (recommended)', exportMaskNote: 'Masks API keys, tokens, passwords and the like. It is the same processing used before sending to a server, and “Always mask” words apply too.',
         exportKeep: 'Copy as is', exportKeepWarn: 'It may contain passwords or keys. Check where you paste it.',
+        exportPromptLabel: 'Request to put first', exportPromptNone: 'None (as a record)', exportPromptSummarize: 'Summarize this', exportPromptContinue: 'Continue the work', exportPromptReview: 'Review from another point of view',
+        exportPromptNote: 'The request you choose goes at the top of the export, so you can just paste it to another AI (SyncLane does not call any AI).',
         exportCopy: 'Copy', exportCopied: 'Copied', exportFailed: (e) => `Failed: ${e}`,
         exportInfo: (m, c, x, keep) => keep ? `${m} messages / ${c} tool calls. Anything that looks like a secret is included as is.` : `${m} messages / ${c} tool calls. ${x} things that look like secrets were masked.`,
         navMask: 'Masking secrets', maskBlock: 'Always mask', maskAllow: 'Allow as they are', maskSave: 'Save',
@@ -720,6 +736,9 @@
     let exportingEvent = null;
     let exportSeq = 0;
     const EXPORT_KEEP_KEY = 'synclane-export-keep-secrets';
+    const EXPORT_PROMPT_KEY = 'synclane-export-prompt';
+    function exportPromptSaved() { try { const v = localStorage.getItem(EXPORT_PROMPT_KEY); return ['summarize', 'continue', 'review'].includes(v) ? v : 'none'; } catch (_) { return 'none'; } }
+    function exportPromptSave(value) { try { localStorage.setItem(EXPORT_PROMPT_KEY, value); } catch (_) {} }
     function exportKeepSaved() { try { return localStorage.getItem(EXPORT_KEEP_KEY) === '1'; } catch (_) { return false; } }
     function exportKeepSave(keep) { try { localStorage.setItem(EXPORT_KEEP_KEY, keep ? '1' : '0'); } catch (_) {} }
     async function refreshExport() {
@@ -730,7 +749,7 @@
       $('export-status').textContent = '';
       $('export-copy').disabled = true;
       try {
-        const result = await invoke('export_section', { eventId: exportingEvent, keepSecrets: keep, lang: resolvedLang(), utcOffsetMinutes: -new Date().getTimezoneOffset() });
+        const result = await invoke('export_section', { eventId: exportingEvent, keepSecrets: keep, lang: resolvedLang(), utcOffsetMinutes: -new Date().getTimezoneOffset(), prompt: $('export-prompt').value });
         if (seq !== exportSeq) return;
         $('export-preview').value = result.markdown;
         $('export-info').textContent = t('exportInfo', result.messages, result.calls, result.masked, keep);
@@ -747,6 +766,7 @@
       const keep = exportKeepSaved();
       $('export-keep').checked = keep;
       $('export-mask').checked = !keep;
+      $('export-prompt').value = exportPromptSaved();
       $('export-preview').value = '';
       $('export-info').textContent = '';
       $('export-overlay').hidden = false;
@@ -755,6 +775,7 @@
     function closeExport() { $('export-overlay').hidden = true; exportingEvent = null; exportSeq++; }
     $('export-mask').addEventListener('change', () => { exportKeepSave(false); refreshExport(); });
     $('export-keep').addEventListener('change', () => { exportKeepSave(true); refreshExport(); });
+    $('export-prompt').addEventListener('change', () => { exportPromptSave($('export-prompt').value); refreshExport(); });
     $('export-cancel').addEventListener('click', closeExport);
     $('export-overlay').addEventListener('click', (event) => { if (event.target === $('export-overlay')) closeExport(); });
     $('export-copy').addEventListener('click', async () => {
