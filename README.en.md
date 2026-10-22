@@ -13,6 +13,7 @@ SyncLane is a free, open-source Mac app that keeps your conversations with Claud
 - **One place for your AI conversations**: Claude Code, Codex, Gemini CLI and Antigravity CLI are collected automatically; Gemini and ChatGPT (web) come in through a Chrome extension.
 - **Ask your AI about your own past**: it works as an MCP server, so you can ask “How did we solve this before?” (read-only).
 - **Your record stays on your Mac**: it is stored in a local SQLite file, and stays even if a tool stops showing its history. **By default nothing is sent anywhere.**
+- **Filter by project, copy as Markdown, and see token usage**: see “What you can do in the window”.
 - **Japanese works too**: full-text search, with substring matching for Japanese.
 - Free and open source (MIT). Installs from a signed and notarized dmg ([download](https://mrktools.app/en/synclane/download/)).
 
@@ -62,6 +63,16 @@ You can also install it by hand without the store (for developers):
 - To use it from source, choose the `extension/` folder of this repository. Build the zip with `sh scripts/pack-extension.sh`.
 - If nothing is imported, first check that **the extension is turned on** (the switch for “SyncLane for AI chats” at `chrome://extensions`), that the SyncLane app is running, and that you reloaded the tab. If the extension icon shows “×”, the conversation did not reach the app.
 - If a site changes its page layout, importing may stop working. When a conversation page yields nothing, the extension icon shows "!" ("×" when the SyncLane app is not running). See [`extension/README.md`](extension/README.md) (in Japanese) for how to fix it.
+
+## What you can do in the window
+
+- **Filter by project**: the sidebar on the left lists your projects (name, last activity). Click one to show only that project; it combines with the date and search filters. Click it again to clear. It is hidden when the window is narrow (900px or less).
+- **Copy as Markdown**: copy one topic, or everything the list currently shows (date, project, search words), as Markdown. You can put a request for another AI at the top (summarize / continue the work / review from another angle). Copying a range takes at most 50 topics, newest first. Anything that looks like a secret is masked by default.
+- **See token usage**: “Token usage” in the header totals tokens for a period (today, 7 days, 30 days, all) by day, project, model or tool. **Only Claude Code, Codex and Gemini CLI are counted.** Antigravity and Gemini / ChatGPT on the web are not included. **Cost (money) is not calculated.** Only the counts are stored, not the conversation text.
+
+![The token usage window (by project)](art/readme/en/usage.png)
+
+*The screen shows made-up conversations.*
 
 ## How search works
 
@@ -114,6 +125,15 @@ For the Claude app (desktop), add this to `claude_desktop_config.json` (you can 
 ```
 
 Once registered, just ask your AI to “ask SyncLane”, and it searches your saved conversations to answer.
+
+Your AI gets four tools (all read-only):
+
+| Tool | What it does |
+|---|---|
+| `search_conversations` | Search conversations by keyword. Add `project` to limit it to one project |
+| `get_session` | Read around a conversation you found |
+| `list_projects` | List projects (name, location, number of conversations, tools used, last activity) |
+| `get_project_context` | A project's recent state (titles of recent conversations and their last exchange) |
 
 ![Claude Code searching SyncLane and answering with a summary from the past](art/readme/en/ask-summary.png)
 
