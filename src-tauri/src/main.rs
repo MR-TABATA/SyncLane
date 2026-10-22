@@ -47,11 +47,19 @@ fn timeline(
     query: Option<String>,
     limit: usize,
     sort: Option<String>,
+    project: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<TimelineEvent>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let order = if sort.as_deref() == Some("relevance") { db::SearchOrder::Relevance } else { db::SearchOrder::Newest };
-    db::timeline_range_ordered(&conn, date_from.as_deref(), date_to.as_deref(), query.as_deref(), limit, order).map_err(|e| e.to_string())
+    db::timeline_in_project(&conn, date_from.as_deref(), date_to.as_deref(), project.as_deref(), query.as_deref(), limit, order).map_err(|e| e.to_string())
+}
+
+/// 「続きから」の一覧(サイドバー)。プロジェクトごとに、ツールごとの最新の会話を返す。読み取りだけ。
+#[tauri::command]
+fn project_overview(state: tauri::State<'_, AppState>) -> Result<Vec<synclane::projects::ProjectRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::projects::overview(&conn).map_err(|e| format!("{e:#}"))
 }
 
 /// 題名の提案(手元の規則)。指した発言が属する区切り(話題のまとまり)の、最近の発言から出す。外には何も送らない。
@@ -349,7 +357,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            status, timeline, mcp_executable, open_search_window, close_search_window,
+            status, timeline, project_overview, mcp_executable, open_search_window, close_search_window,
             section_title_suggest, section_title_set, export_section, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,

@@ -130,6 +130,11 @@ fn shell_quote(text: &str) -> String {
     }
 }
 
+/// そのツールの会話を、元のツールで再開できるか(Web 版の Gemini・ChatGPT は、再開するコマンドが無い)。
+pub fn supports(source_tool: &str) -> bool {
+    matches!(source_tool, "claude_code" | "codex" | "gemini_cli")
+}
+
 /// 取り込み元・プロジェクトの場所・記録ファイル・保存してある ID から、再開するコマンドを作る。
 pub fn build(source_tool: &str, project_path: &str, source_file: Option<&str>, key: Option<&str>) -> Option<String> {
     let (program, id) = match source_tool {

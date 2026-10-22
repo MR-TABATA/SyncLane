@@ -420,6 +420,20 @@ pub fn timeline_range_ordered(
     search_events_by(conn, date_from, date_to, query, limit, has_search_index(conn), order)
 }
 
+/// `timeline_range_ordered` に、プロジェクトの場所での絞り込みを足したもの(`sessions.project_path` が、そのまま一致する会話だけ)。
+/// `project` が None か空なら、絞り込まない。
+pub fn timeline_in_project(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    order: SearchOrder,
+) -> Result<Vec<TimelineEvent>> {
+    search_events_in(conn, date_from, date_to, project, query, limit, has_search_index(conn), order)
+}
+
 /// この検索語に、関連度の点数を付けられるか(検索語がある)。検索語が無い(日付だけ)ときは、関連度順を頼んでも、新しい順になる。
 pub fn can_rank(query: Option<&str>) -> bool {
     query.unwrap_or_default().split_whitespace().next().is_some()
@@ -476,6 +490,21 @@ fn search_events_by(
     indexed: bool,
     order: SearchOrder,
 ) -> Result<Vec<TimelineEvent>> {
+    search_events_in(conn, date_from, date_to, None, query, limit, indexed, order)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_events_in(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    indexed: bool,
+    order: SearchOrder,
+) -> Result<Vec<TimelineEvent>> {
+    let project = project.filter(|p| !p.is_empty());
     let terms: Vec<&str> = query
         .unwrap_or_default()
         .split_whitespace()
@@ -495,6 +524,9 @@ fn search_events_by(
     }
     if date_to.is_some() {
         conditions.push("e.occurred_at < ?".to_owned());
+    }
+    if project.is_some() {
+        conditions.push("s.project_path = ?".to_owned());
     }
     // 索引で探せる語を先に評価する(AND は、前から評価されるので、重い本文の直接検索は、絞られた結果にだけ掛かる)
     let mut ordered: Vec<&str> = terms.clone();
@@ -524,6 +556,9 @@ fn search_events_by(
     }
     if let Some(date) = date_to {
         values.push(Box::new(day_bound(date)));
+    }
+    if let Some(project) = project {
+        values.push(Box::new(project.to_owned()));
     }
     for term in &ordered {
         values.push(Box::new(if indexed && indexable(term) { fts_phrase(term) } else { (*term).to_owned() }));
@@ -716,6 +751,25 @@ mod tests {
         // 索引は、作り直しても、同じ結果
         rebuild_search_index(&conn)?;
         assert_eq!(found("伏見稲荷")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn project_filter_matches_the_exact_place_and_combines_with_the_query() -> Result<()> {
+        let conn = open_memory()?;
+        corpus(&conn);
+        let all = timeline_in_project(&conn, None, None, None, None, 50, SearchOrder::Newest)?;
+        let mine = timeline_in_project(&conn, None, None, Some("/work/SyncLane"), None, 50, SearchOrder::Newest)?;
+        assert!(!mine.is_empty() && mine.len() < all.len());
+        assert!(mine.iter().all(|e| e.project_path == "/work/SyncLane"));
+        // 場所が、そのまま一致するものだけ(一部が一致するだけでは、絞り込まない)
+        assert!(timeline_in_project(&conn, None, None, Some("/work/Sync"), None, 50, SearchOrder::Newest)?.is_empty());
+        // 空の指定は、絞り込まない
+        assert_eq!(timeline_in_project(&conn, None, None, Some(""), None, 50, SearchOrder::Newest)?.len(), all.len());
+        // 検索語・日付と、重ねて効く
+        assert!(!timeline_in_project(&conn, None, None, Some("/work/SyncLane"), Some("SQLite"), 50, SearchOrder::Relevance)?.is_empty());
+        assert!(timeline_in_project(&conn, None, None, Some("/work/other"), Some("SQLite"), 50, SearchOrder::Relevance)?.is_empty());
+        assert!(timeline_in_project(&conn, Some("2026-10-02"), None, Some("/work/SyncLane"), None, 50, SearchOrder::Newest)?.iter().all(|e| e.occurred_at.as_str() >= "2026-10-02"));
         Ok(())
     }
 
