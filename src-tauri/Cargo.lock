@@ -3501,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "synclane"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "clap",
@@ -3519,7 +3519,7 @@ dependencies = [
 
 [[package]]
 name = "synclane-app"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "rusqlite",
