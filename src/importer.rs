@@ -212,6 +212,7 @@ fn import_gemini_file(
         .and_then(|s| s.to_str()).unwrap_or("(unknown)").to_string();
     let mut rows: Vec<(String, String, &'static str, String, i64)> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
+    let mut usages: Vec<TokenUsage> = Vec::new();
     let mut put = |row: (String, String, &'static str, String, i64)| match index.get(&row.0) {
         Some(&i) => rows[i] = (row.0, row.1, row.2, row.3, rows[i].4), // 最後の版で置き換える(並びは、最初に出た位置のまま)
         None => {
@@ -231,6 +232,7 @@ fn import_gemini_file(
         }
         if let Some(messages) = value.get("$set").and_then(|set| set.get("messages")).and_then(Value::as_array) {
             for (message_index, message) in messages.iter().enumerate() {
+                usages.extend(usage::gemini_usage(message).filter(|u| date.is_none_or(|wanted| u.occurred_at.starts_with(wanted))));
                 let Some((occurred_at, role, content)) = gemini_message_content(message) else { continue };
                 if date.is_some_and(|wanted| !occurred_at.starts_with(wanted)) { continue; }
                 let event_id = message.get("id").and_then(Value::as_str).map(str::to_owned)
@@ -238,6 +240,7 @@ fn import_gemini_file(
                 put((event_id, occurred_at, role, content, message_index as i64));
             }
         } else if let Some((occurred_at, role, content)) = gemini_message_content(&value) {
+            usages.extend(usage::gemini_usage(&value).filter(|u| date.is_none_or(|wanted| u.occurred_at.starts_with(wanted))));
             if date.is_some_and(|wanted| !occurred_at.starts_with(wanted)) { continue; }
             let event_id = value.get("id").or_else(|| value.get("uuid")).and_then(Value::as_str)
                 .map(str::to_owned).unwrap_or_else(|| format!("{session_key}:{line_number}"));
@@ -272,6 +275,16 @@ fn import_gemini_file(
             }
         }
     };
+    // トークン数は、この会話に保存する。会話がまだ無い(すべて別の会話に、すでに入っている)ときは、その発言のある会話に
+    let usage_session = match session_id {
+        Some(id) => Some(id),
+        None => rows.first().and_then(|row| {
+            tx.query_row("SELECT session_id FROM events WHERE source_tool = ?1 AND source_event_id = ?2", params![GEMINI_TOOL, row.0], |r| r.get::<_, i64>(0)).optional().ok().flatten()
+        }),
+    };
+    if let (Some(id), false) = (usage_session, usages.is_empty()) {
+        usage::store(tx, id, GEMINI_TOOL, &usages)?;
+    }
     for (event_id, occurred_at, role, content, sequence) in rows {
         let inserted = match session_id {
             Some(session_id) => tx.execute(
@@ -930,6 +943,7 @@ const CLAUDE_CALLS_DONE: &str = "tool_calls_backfilled_claude";
 const CODEX_CALLS_DONE: &str = "tool_calls_backfilled_codex";
 const CLAUDE_USAGE_DONE: &str = "token_usage_backfilled_claude";
 const CODEX_USAGE_DONE: &str = "token_usage_backfilled_codex";
+const GEMINI_USAGE_DONE: &str = "token_usage_backfilled_gemini";
 
 /// すでに取り込んだ Claude Code の会話に、記録ファイルから、ツールの呼び出しをさかのぼって保存する。**1 度だけ**走る
 /// (増分の収集は、読み済みの位置から先しか読まないため)。返り値は、入れた件数。記録ファイルが消えていれば、補えない。
@@ -1058,6 +1072,16 @@ pub fn backfill_token_usage_codex(conn: &std::sync::Mutex<Connection>, root: &Pa
     let conn = conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
     crate::sync::store::set(&conn, CODEX_USAGE_DONE, "1")?;
     Ok(added)
+}
+
+/// すでに取り込んだ Gemini CLI の会話に、トークン数をさかのぼって保存する。**1 度だけ**走る。
+/// Gemini CLI は、変わったファイルだけを、全体読み直す作り(覚えているのは、ファイルの大きさ)なので、覚えている大きさを消して、次の収集で、全部を読み直させる
+/// (発言は、すでにあれば入れ直さない。本文が違うときだけ更新される)。返り値は、消した件数(読み直す記録ファイルの数)。
+pub fn backfill_token_usage_gemini(conn: &Connection) -> Result<usize> {
+    if crate::sync::store::get(conn, GEMINI_USAGE_DONE)?.as_deref() == Some("1") { return Ok(0); }
+    let reset = conn.execute("DELETE FROM collector_files WHERE source_tool = ?1", [GEMINI_TOOL])?;
+    crate::sync::store::set(conn, GEMINI_USAGE_DONE, "1")?;
+    Ok(reset)
 }
 
 /// すでに取り込んだ会話について、記録ファイルから、要約して続けた位置をさかのぼって残す。**1 度だけ**走る
@@ -1678,6 +1702,39 @@ mod tests {
         // 日付の指定(CLI): その日だけ
         let parsed = parse_codex_file(&file, 0, Some("2026-10-19"))?;
         assert!(parsed.usages.is_empty());
+        std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn gemini_cli_token_usage_is_saved_once_per_reply_and_backfilled_by_rereading_once() -> Result<()> {
+        let temp = tempfile_dir();
+        let chats = temp.join("project").join("chats");
+        std::fs::create_dir_all(&chats)?;
+        let snapshot = r#"{"$set":{"messages":[{"id":"u1","timestamp":"2026-10-20T01:00:00.000Z","type":"user","content":[{"text":"質問"}]},{"id":"g1","timestamp":"2026-10-20T01:00:05.000Z","type":"gemini","model":"gemini-3-pro","content":[{"text":"回答"}],"tokens":{"input":1000,"output":40,"cached":600,"thoughts":60,"tool":0,"total":1100}}]}}"#;
+        // 返答 g1 は、途中経過として、2 回書かれる。g2 は、1 行が返答そのもの
+        let single = r#"{"id":"g2","timestamp":"2026-10-20T01:01:00.000Z","type":"gemini","model":"gemini-3-pro","content":[{"text":"続き"}],"tokens":{"input":200,"output":10,"cached":0,"thoughts":0,"tool":0,"total":210}}"#;
+        std::fs::write(chats.join("session.jsonl"), format!("{{\"sessionId\":\"s1\",\"kind\":\"main\"}}\n{snapshot}\n{snapshot}\n{single}\n"))?;
+        let mut conn = db::open_memory()?;
+        collect_gemini_incremental(&temp, &mut conn)?;
+        let expected = vec![
+            ("gemini_cli".to_string(), "g1".to_string(), "gemini-3-pro".to_string(), 400, 100, 600),
+            ("gemini_cli".to_string(), "g2".to_string(), "gemini-3-pro".to_string(), 200, 10, 0),
+        ];
+        assert_eq!(usage_of(&conn), expected);
+        collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn), expected);
+        // この版より前に取り込んだ状態: 数が無い。大きさが変わらないので、読み直されない
+        conn.execute("DELETE FROM token_usage", [])?;
+        collect_gemini_incremental(&temp, &mut conn)?;
+        assert!(usage_of(&conn).is_empty());
+        // さかのぼり: 覚えている大きさを消して(1 度だけ)、次の収集で読み直す
+        assert_eq!(backfill_token_usage_gemini(&conn)?, 1);
+        collect_gemini_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn), expected);
+        assert_eq!(db::counts(&conn)?.events, 3, "発言は増えない");
+        conn.execute("DELETE FROM token_usage", [])?;
+        assert_eq!(backfill_token_usage_gemini(&conn)?, 0, "1 度だけ");
         std::fs::remove_dir_all(temp)?;
         Ok(())
     }

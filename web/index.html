@@ -310,7 +310,7 @@
       <p id="usage-total" class="usage-total"></p>
       <div id="usage-legend" class="usage-legend" hidden></div>
       <div class="usage-table-wrap"><table id="usage-table" class="usage-table"></table></div>
-      <p class="note" data-i18n="usageNote">Claude Code と Codex の記録から集計しています。Gemini CLI・Antigravity・Web 版の Gemini と ChatGPT は、記録にトークン数がないので、含まれません。費用（金額）は、計算しません。</p>
+      <p class="note" data-i18n="usageNote">Claude Code・Codex・Gemini CLI の記録から集計しています。Antigravity・Web 版の Gemini と ChatGPT は、まだ集計していません（含まれません）。費用（金額）は、計算しません。</p>
       <div class="opt-row"><button id="usage-close" type="button" data-i18n="close">閉じる</button></div>
     </div>
   </div>
@@ -425,7 +425,7 @@
         resumeBtn: 'この会話を再開するコマンドをコピー', resumeNone: 'この会話には、再開するコマンドがありません', resumeCopied: (c) => `コピーしました: ${c}`, resumeFailed: (e) => `できませんでした: ${e}`,
         usageTip: 'トークン使用量', usageHeading: 'トークン使用量', usageToday: '今日', usage7: '7 日間', usage30: '30 日間', usageAll: 'すべて',
         usageByDay: '日別', usageByProject: 'プロジェクト別', usageByModel: 'モデル別', usageByTool: 'ツール別',
-        usageNote: 'Claude Code と Codex の記録から集計しています。Gemini CLI・Antigravity・Web 版の Gemini と ChatGPT は、記録にトークン数がないので、含まれません。費用（金額）は、計算しません。',
+        usageNote: 'Claude Code・Codex・Gemini CLI の記録から集計しています。Antigravity・Web 版の Gemini と ChatGPT は、まだ集計していません（含まれません）。費用（金額）は、計算しません。',
         usageCols: ['入力', '出力', 'キャッシュ作成', 'キャッシュ読み出し', '回数'], usageNew: '入力 + 出力 + キャッシュ作成', usageModelUnknown: '(不明)',
         usageTotal: (calls, input, output, cc, cr) => `合計 ${calls} 回 / 入力 ${input} / 出力 ${output} / キャッシュ作成 ${cc} / キャッシュ読み出し ${cr}`,
         usageEmpty: 'この期間の、トークン数の記録はありません。過去の会話の分は、アプリを起動したあと、少しずつ読み込まれます。', usageTruncated: (n) => `上位 ${n} 件だけを表示しています。`, usageFailed: (e) => `できませんでした: ${e}`,
@@ -466,7 +466,7 @@
         resumeBtn: 'Copy the command to resume this conversation', resumeNone: 'There is no resume command for this conversation', resumeCopied: (c) => `Copied: ${c}`, resumeFailed: (e) => `Failed: ${e}`,
         usageTip: 'Token usage', usageHeading: 'Token usage', usageToday: 'Today', usage7: 'Last 7 days', usage30: 'Last 30 days', usageAll: 'All time',
         usageByDay: 'By day', usageByProject: 'By project', usageByModel: 'By model', usageByTool: 'By tool',
-        usageNote: 'Counted from the logs of Claude Code and Codex. Gemini CLI, Antigravity and the web versions of Gemini and ChatGPT do not record token counts, so they are not included. Costs (money) are not calculated.',
+        usageNote: 'Counted from the logs of Claude Code, Codex and Gemini CLI. Antigravity and the web versions of Gemini and ChatGPT are not counted yet (not included). Costs (money) are not calculated.',
         usageCols: ['Input', 'Output', 'Cache write', 'Cache read', 'Calls'], usageNew: 'Input + output + cache write', usageModelUnknown: '(unknown)',
         usageTotal: (calls, input, output, cc, cr) => `Total ${calls} calls / input ${input} / output ${output} / cache write ${cc} / cache read ${cr}`,
         usageEmpty: 'No token counts were recorded for this period. Past conversations are read in gradually after the app starts.', usageTruncated: (n) => `Showing the top ${n} only.`, usageFailed: (e) => `Failed: ${e}`,

@@ -384,6 +384,12 @@ fn main() {
                 if let Err(error) = importer::backfill_token_usage_codex(&collector_conn, &codex_root) {
                     eprintln!("synclane token usage (codex): {error:#}");
                 }
+                // Gemini CLI は、覚えている大きさを 1 度だけ消して、次の収集で読み直させる
+                if let Ok(conn) = collector_conn.lock() {
+                    if let Err(error) = importer::backfill_token_usage_gemini(&conn) {
+                        eprintln!("synclane token usage (gemini): {error:#}");
+                    }
+                }
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {

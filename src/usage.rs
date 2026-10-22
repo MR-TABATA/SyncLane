@@ -2,8 +2,9 @@
 //!
 //! - 保存するのは数だけ(入力・出力・キャッシュの作成と読み出し・モデル名・時刻)。**会話の本文には触れない**。
 //! - 費用(ドル)の目安と価格表は、作らない(契約の形で意味が変わり、価格表の保守だけが残るため)。
-//! - 元の記録にトークン数があるのは、Claude Code(AI の返答すべての `usage`)と Codex(`token_count`)。
-//!   Gemini CLI・Antigravity・Web 版の Gemini と ChatGPT は、記録に無い(含まれない)。
+//! - 集計するのは、Claude Code(AI の返答すべての `usage`)・Codex(`token_count`)・Gemini CLI(返答の `tokens`)。
+//!   Antigravity は、記録に、トークン数の列がない(使用量が、別の形式の表に入っているかは、未確認)。Web 版の Gemini と ChatGPT は、画面に出ないので、分からない。
+//!   実際の記録の形は、2026-10-22 に、キー名と値の型だけを確かめた(本文と値は見ていない)。
 //! - データベースの版は変えない(表は、無ければ作る。`db.rs`)。
 
 use anyhow::Result;
@@ -62,7 +63,7 @@ pub fn claude_usage(value: &Value) -> Option<TokenUsage> {
 }
 
 /// Codex の `token_count` の行から。`payload.info.last_token_usage`(直前の 1 回の呼び出し)を使う。`info` が無い行(利用枠の情報だけ)は、None。
-/// Codex の `input_tokens` は、キャッシュに当たった分を含むので、`cached_input_tokens` を引いて、`input` と `cache_read` に分ける。
+/// Codex の `input_tokens` は、キャッシュに当たった分・作成した分を含むので、`cached_input_tokens` と `cache_write_input_tokens` を引いて、`input`・`cache_read`・`cache_creation` に分ける。
 /// 同じ累計の行が続けて出ることがあるので、鍵は「記録ファイル名:累計」にして、1 件にまとめる。`model` は、直前の `turn_context` の値(`codex_model`)。
 pub fn codex_usage(value: &Value, file_stem: &str, model: &str) -> Option<TokenUsage> {
     if value.get("type").and_then(Value::as_str) != Some("event_msg") {
@@ -77,15 +78,42 @@ pub fn codex_usage(value: &Value, file_stem: &str, model: &str) -> Option<TokenU
     let total = info.get("total_token_usage").and_then(|t| t.get("total_tokens")).and_then(Value::as_i64)?;
     let input_all = number(last.get("input_tokens"));
     let cached = number(last.get("cached_input_tokens")).min(input_all);
+    // キャッシュの作成(`cache_write_input_tokens`)も、入力の内訳(実際の記録では、キャッシュに当たった分との合計が、入力を超えない)
+    let written = number(last.get("cache_write_input_tokens")).min(input_all - cached);
     let found = TokenUsage {
         source_usage_id: format!("{file_stem}:{total}"),
         occurred_at: value.get("timestamp").and_then(Value::as_str)?.to_string(),
         model: model.to_string(),
-        input: input_all - cached,
+        input: input_all - cached - written,
         output: number(last.get("output_tokens")),
-        cache_creation: 0,
+        cache_creation: written,
         cache_read: cached,
         reasoning: number(last.get("reasoning_output_tokens")),
+    };
+    (found.input + found.output + found.cache_creation + found.cache_read > 0).then_some(found)
+}
+
+/// Gemini CLI の、AI の返答(`type` が `gemini`)の `tokens` から。`message` は、返答 1 つ(`$set.messages` の要素、または、1 行が返答そのもの)。
+/// `input` は、キャッシュに当たった分(`cached`)を含むので、引いて、`input` と `cache_read` に分ける(`tool` は入力として足す。実際の記録では、すべて 0)。
+/// `output` には、考えている分(`thoughts`)が含まれない(`total = input + output + thoughts`)。料金上は出力なので、`output` に足して、`reasoning` にも残す。
+/// 同じ返答が、途中経過として何度も書かれるが、数は同じ(実際の記録で確認)。鍵は、返答の ID。
+pub fn gemini_usage(message: &Value) -> Option<TokenUsage> {
+    if message.get("type").and_then(Value::as_str) != Some("gemini") {
+        return None;
+    }
+    let tokens = message.get("tokens").filter(|t| t.is_object())?;
+    let input_all = number(tokens.get("input"));
+    let cached = number(tokens.get("cached")).min(input_all);
+    let thoughts = number(tokens.get("thoughts"));
+    let found = TokenUsage {
+        source_usage_id: message.get("id").and_then(Value::as_str)?.to_string(),
+        occurred_at: message.get("timestamp").and_then(Value::as_str)?.to_string(),
+        model: message.get("model").and_then(Value::as_str).unwrap_or_default().to_string(),
+        input: input_all - cached + number(tokens.get("tool")),
+        output: number(tokens.get("output")) + thoughts,
+        cache_creation: 0,
+        cache_read: cached,
+        reasoning: thoughts,
     };
     (found.input + found.output + found.cache_read > 0).then_some(found)
 }
@@ -321,10 +349,29 @@ mod tests {
         assert_eq!((found.input, found.cache_read, found.output, found.reasoning, found.cache_creation), (200, 800, 50, 20, 0));
         // 利用枠の情報だけの行(info が null)
         let limits_only = json!({ "timestamp": "2026-10-20T02:00:00Z", "type": "event_msg", "payload": { "type": "token_count", "info": null, "rate_limits": {} } });
+        // キャッシュの作成は、入力の内訳(入力 1000 = 通常 150 + キャッシュ読み出し 800 + キャッシュ作成 50)
+        let written = token_count("2026-10-20T02:00:00.000Z", 6000, json!({ "input_tokens": 1000, "cached_input_tokens": 800, "cache_write_input_tokens": 50, "output_tokens": 50 }));
+        let found = codex_usage(&written, "rollout-x", "gpt-5").unwrap();
+        assert_eq!((found.input, found.cache_creation, found.cache_read), (150, 50, 800));
         assert!(codex_usage(&limits_only, "rollout-x", "").is_none());
         assert!(codex_usage(&json!({ "type": "event_msg", "payload": { "type": "agent_message" } }), "rollout-x", "").is_none());
         assert_eq!(codex_model(&json!({ "type": "turn_context", "payload": { "model": "gpt-5" } })).as_deref(), Some("gpt-5"));
         assert_eq!(codex_model(&json!({ "type": "turn_context", "payload": {} })), None);
+    }
+
+    #[test]
+    fn gemini_usage_splits_the_cached_input_and_adds_the_thoughts_to_the_output() {
+        let message = json!({ "id": "g1", "timestamp": "2026-10-20T03:00:00.000Z", "type": "gemini", "model": "gemini-3-pro", "content": [], "tokens": { "input": 1000, "output": 40, "cached": 600, "thoughts": 60, "tool": 0, "total": 1100 } });
+        let found = gemini_usage(&message).unwrap();
+        assert_eq!((found.source_usage_id.as_str(), found.model.as_str()), ("g1", "gemini-3-pro"));
+        // 入力はキャッシュに当たった分を引く。出力には、考えている分を足す(推論は、その内訳)
+        assert_eq!((found.input, found.cache_read, found.output, found.reasoning, found.cache_creation), (400, 600, 100, 60, 0));
+        // ユーザーの発言・tokens の無い返答・全部 0 は、数えない
+        assert!(gemini_usage(&json!({ "id": "u1", "timestamp": "2026-10-20T03:00:00Z", "type": "user", "tokens": { "input": 5 } })).is_none());
+        assert!(gemini_usage(&json!({ "id": "g2", "timestamp": "2026-10-20T03:00:00Z", "type": "gemini" })).is_none());
+        assert!(gemini_usage(&json!({ "id": "g3", "timestamp": "2026-10-20T03:00:00Z", "type": "gemini", "tokens": { "input": 0, "output": 0, "cached": 0, "thoughts": 0, "tool": 0, "total": 0 } })).is_none());
+        // ID が無ければ、鍵が作れないので、数えない
+        assert!(gemini_usage(&json!({ "timestamp": "2026-10-20T03:00:00Z", "type": "gemini", "tokens": { "input": 5, "output": 1 } })).is_none());
     }
 
     fn two_sessions() -> Connection {
