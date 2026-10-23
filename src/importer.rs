@@ -1687,10 +1687,15 @@ mod tests {
         let mut conn = db::open_memory()?;
         collect_codex_incremental(&temp, &mut conn)?;
         let expected = vec![
-            ("codex".to_string(), "rollout-2026-10-20T20-00-00-xyz:1050".to_string(), "gpt-5".to_string(), 200, 50, 800),
-            ("codex".to_string(), "rollout-2026-10-20T20-00-00-xyz:1400".to_string(), "gpt-5".to_string(), 300, 50, 0),
+            ("codex".to_string(), "2026-10-20T11:00:02:1050".to_string(), "gpt-5".to_string(), 200, 50, 800),
+            ("codex".to_string(), "2026-10-20T11:00:06:1400".to_string(), "gpt-5".to_string(), 300, 50, 0),
         ];
         assert_eq!(usage_of(&conn), expected);
+        collect_codex_incremental(&temp, &mut conn)?;
+        assert_eq!(usage_of(&conn), expected);
+        // 会話がフォークされて別のファイルに履歴が複製されても、トークン数は重複して数えない
+        let forked_file = day.join("rollout-2026-10-20T21-00-00-forked.jsonl");
+        std::fs::copy(&file, &forked_file)?;
         collect_codex_incremental(&temp, &mut conn)?;
         assert_eq!(usage_of(&conn), expected);
         // さかのぼり(1 度だけ)

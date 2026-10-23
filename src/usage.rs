@@ -64,8 +64,8 @@ pub fn claude_usage(value: &Value) -> Option<TokenUsage> {
 
 /// Codex の `token_count` の行から。`payload.info.last_token_usage`(直前の 1 回の呼び出し)を使う。`info` が無い行(利用枠の情報だけ)は、None。
 /// Codex の `input_tokens` は、キャッシュに当たった分・作成した分を含むので、`cached_input_tokens` と `cache_write_input_tokens` を引いて、`input`・`cache_read`・`cache_creation` に分ける。
-/// 同じ累計の行が続けて出ることがあるので、鍵は「記録ファイル名:累計」にして、1 件にまとめる。`model` は、直前の `turn_context` の値(`codex_model`)。
-pub fn codex_usage(value: &Value, file_stem: &str, model: &str) -> Option<TokenUsage> {
+/// 同じ累計の行がミリ秒差で続けて出ることや、会話がフォークされて履歴が別ファイルに複製されることがあるので、鍵は「発生時刻(秒):累計」にして、1 件にまとめる。`model` は、直前の `turn_context` の値(`codex_model`)。
+pub fn codex_usage(value: &Value, _file_stem: &str, model: &str) -> Option<TokenUsage> {
     if value.get("type").and_then(Value::as_str) != Some("event_msg") {
         return None;
     }
@@ -76,13 +76,15 @@ pub fn codex_usage(value: &Value, file_stem: &str, model: &str) -> Option<TokenU
     let info = payload.get("info").filter(|info| info.is_object())?;
     let last = info.get("last_token_usage")?;
     let total = info.get("total_token_usage").and_then(|t| t.get("total_tokens")).and_then(Value::as_i64)?;
+    let occurred_at = value.get("timestamp").and_then(Value::as_str)?;
+    let sec = occurred_at.split('.').next().unwrap_or(occurred_at).trim_end_matches('Z');
     let input_all = number(last.get("input_tokens"));
     let cached = number(last.get("cached_input_tokens")).min(input_all);
     // キャッシュの作成(`cache_write_input_tokens`)も、入力の内訳(実際の記録では、キャッシュに当たった分との合計が、入力を超えない)
     let written = number(last.get("cache_write_input_tokens")).min(input_all - cached);
     let found = TokenUsage {
-        source_usage_id: format!("{file_stem}:{total}"),
-        occurred_at: value.get("timestamp").and_then(Value::as_str)?.to_string(),
+        source_usage_id: format!("{sec}:{total}"),
+        occurred_at: occurred_at.to_string(),
         model: model.to_string(),
         input: input_all - cached - written,
         output: number(last.get("output_tokens")),
@@ -344,7 +346,7 @@ mod tests {
     fn codex_usage_splits_the_cached_input_and_ignores_rows_without_info() {
         let row = token_count("2026-10-20T02:00:00.000Z", 5000, json!({ "input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50, "reasoning_output_tokens": 20, "total_tokens": 1050 }));
         let found = codex_usage(&row, "rollout-x", "gpt-5").unwrap();
-        assert_eq!((found.source_usage_id.as_str(), found.model.as_str()), ("rollout-x:5000", "gpt-5"));
+        assert_eq!((found.source_usage_id.as_str(), found.model.as_str()), ("2026-10-20T02:00:00:5000", "gpt-5"));
         // 入力は、キャッシュに当たった分を引く。推論は、出力の内訳
         assert_eq!((found.input, found.cache_read, found.output, found.reasoning, found.cache_creation), (200, 800, 50, 20, 0));
         // 利用枠の情報だけの行(info が null)
