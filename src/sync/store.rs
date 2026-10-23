@@ -112,8 +112,8 @@ pub fn set_token_meta(conn: &Connection, scope: &str, meta: &TokenMeta) -> Resul
 /// 接続を解除する。そのサーバーに送った記録も消す(つなぎ直すと、全部を送り直す。サーバー側は重複を省く)。
 pub fn clear_connection(conn: &Connection) -> Result<()> {
     if let Some(server) = get(conn, K_SERVER)? {
-        for table in ["sync_sessions", "sync_events", "sync_outbox"] {
-            conn.execute(&format!("DELETE FROM {table} WHERE server_id = ?1"), [&server])?;
+        for table in ["sync_sessions", "sync_events", "sync_outbox", "sync_session_meta"] {
+            let _ = conn.execute(&format!("DELETE FROM {table} WHERE server_id = ?1"), [&server]);
         }
     }
     for key in [K_SERVER, K_DEVICE, K_USER, K_MODE, K_RULES, "sync.last_result"] {
@@ -269,11 +269,13 @@ pub fn pending_events(conn: &Connection, server: &str, mode: Mode, limit: usize)
 
 /// 送ったあとで、題名などが変わった会話(発言は送らず、会話の情報だけを送り直す)。
 pub fn sessions_needing_meta(conn: &Connection, server: &str, mode: Mode) -> Result<Vec<i64>> {
+    crate::db::ensure_sync_session_meta(conn)?;
     let eligible = eligible(&rules(conn)?);
     let sql = format!(
         "SELECT s.id FROM sessions s
-         JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = s.id
-         WHERE {eligible} AND ss.sent_at IS NOT NULL AND s.updated_at > ss.sent_at
+         LEFT JOIN sync_sessions ss ON ss.server_id = ?1 AND ss.session_id = s.id
+         JOIN sync_session_meta sm ON sm.server_id = ?1 AND sm.session_id = s.id
+         WHERE {eligible} AND sm.sent_at IS NOT NULL AND s.updated_at > sm.sent_at
          ORDER BY s.id LIMIT 200"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -322,6 +324,7 @@ pub fn counts(conn: &Connection, server: &str, mode: Mode) -> Result<Counts> {
 
 /// 送った印を付ける。`built_at` は、バッチを組んだ時刻(送っている間に本文が更新されたら、次回に送り直せるように)。
 pub fn mark_sent(conn: &Connection, server: &str, batch_id: &str, event_ids: &[i64], session_ids: &[i64], built_at: &str) -> Result<()> {
+    crate::db::ensure_sync_session_meta(conn)?;
     let tx = conn.unchecked_transaction()?;
     for id in event_ids {
         tx.execute(
@@ -332,8 +335,12 @@ pub fn mark_sent(conn: &Connection, server: &str, batch_id: &str, event_ids: &[i
     }
     for id in session_ids {
         tx.execute(
-            "INSERT INTO sync_sessions(server_id, session_id, state, sent_at) VALUES (?1, ?2, 'send', ?3)
+            "INSERT INTO sync_session_meta(server_id, session_id, sent_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(server_id, session_id) DO UPDATE SET sent_at = excluded.sent_at",
+            params![server, id, built_at],
+        )?;
+        tx.execute(
+            "UPDATE sync_sessions SET sent_at = ?3 WHERE server_id = ?1 AND session_id = ?2",
             params![server, id, built_at],
         )?;
     }

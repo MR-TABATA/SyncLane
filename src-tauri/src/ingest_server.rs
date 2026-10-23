@@ -11,7 +11,19 @@ use synclane::ingest::{self, Payload};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub const ADDRESS: &str = "127.0.0.1:47821";
+pub const STORE_EXTENSION_ORIGIN: &str = "chrome-extension://jibhikabeebhfbhablfedojafekcmmog";
 const MAX_BODY: u64 = 8 * 1024 * 1024;
+
+/// 受け付ける拡張機能の Origin か。公開されている公式拡張機能、または環境変数で許可された開発用拡張機能に限る。
+pub fn is_allowed_origin(origin: &str) -> bool {
+    if origin == STORE_EXTENSION_ORIGIN {
+        return true;
+    }
+    // 手で入れた拡張(開発用)は、ID を環境変数で足す(カンマ区切り)
+    std::env::var("SYNCLANE_EXTENSION_IDS")
+        .ok()
+        .is_some_and(|ids| ids.split(',').any(|id| origin == format!("chrome-extension://{}", id.trim())))
+}
 
 /// 受け口を別スレッドで動かす。会話が増えたら `on_changed` を呼ぶ。
 pub fn spawn(address: &str, conn: Arc<Mutex<Connection>>, on_changed: impl Fn(usize) + Send + 'static) {
@@ -53,7 +65,7 @@ fn respond(request: Request, status: u16, body: &str, origin: Option<&str>) {
 }
 
 fn handle(mut request: Request, conn: &Arc<Mutex<Connection>>, on_changed: &impl Fn(usize)) {
-    let origin = request_header(&request, "Origin").filter(|o| o.starts_with("chrome-extension://"));
+    let origin = request_header(&request, "Origin").filter(|o| is_allowed_origin(o));
     if origin.is_none() {
         return respond(request, 403, r#"{"ok":false,"error":"forbidden"}"#, None);
     }
@@ -129,13 +141,15 @@ mod tests {
         spawn(address, Arc::clone(&conn), move |n| { counter.fetch_add(n, Ordering::SeqCst); });
 
         let body = r#"{"source":"gemini_web","conversation_id":"c1","title":"題","captured_at":"2026-10-16T01:00:00.000Z","messages":[{"index":0,"role":"user","text":"質問"},{"index":1,"role":"assistant","text":"回答"}]}"#;
-        let ext = [("Origin", "chrome-extension://abcdef"), ("Content-Type", "application/json")];
+        let ext = [("Origin", STORE_EXTENSION_ORIGIN), ("Content-Type", "application/json")];
 
         // 拡張ではないページ(Origin が https)・Origin なしは拒否
         assert_eq!(send(address, "POST", "/ingest", &[("Origin", "https://evil.example"), ("Content-Type", "application/json")], body).0, 403);
         assert_eq!(send(address, "POST", "/ingest", &[("Content-Type", "application/json")], body).0, 403);
+        // 公式以外の別拡張機能の ID は拒否
+        assert_eq!(send(address, "POST", "/ingest", &[("Origin", "chrome-extension://unauthorized_extension"), ("Content-Type", "application/json")], body).0, 403);
         // JSON 以外は拒否
-        assert_eq!(send(address, "POST", "/ingest", &[("Origin", "chrome-extension://abcdef"), ("Content-Type", "text/plain")], body).0, 415);
+        assert_eq!(send(address, "POST", "/ingest", &[("Origin", STORE_EXTENSION_ORIGIN), ("Content-Type", "text/plain")], body).0, 415);
         // 壊れた JSON・不正な中身は拒否
         assert_eq!(send(address, "POST", "/ingest", &ext, "{").0, 400);
         assert_eq!(send(address, "POST", "/ingest", &ext, &body.replace("gemini_web", "evil")).0, 400);
@@ -150,7 +164,7 @@ mod tests {
         assert_eq!(changed.load(Ordering::SeqCst), 2);
 
         // 事前確認と疎通確認
-        assert_eq!(send(address, "OPTIONS", "/ingest", &[("Origin", "chrome-extension://abcdef")], "").0, 204);
-        assert_eq!(send(address, "GET", "/ping", &[("Origin", "chrome-extension://abcdef")], "").0, 200);
+        assert_eq!(send(address, "OPTIONS", "/ingest", &[("Origin", STORE_EXTENSION_ORIGIN)], "").0, 204);
+        assert_eq!(send(address, "GET", "/ping", &[("Origin", STORE_EXTENSION_ORIGIN)], "").0, 200);
     }
 }

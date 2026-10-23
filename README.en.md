@@ -91,7 +91,7 @@ Use the ✎ next to a title in the list to rewrite it. Claude Code gives a conve
 
 If you connect to a SyncLane server (for example one your company runs), you can send the conversations you choose to it over HTTPS, so your team can search past decisions together. The server is provided separately and is not part of this repository. **It is not available yet.**
 
-- **If you do not connect, nothing is sent.** Even after connecting, **nothing is sent by default**: you pick the conversations, or turn on the automatic mode.
+- **If you do not connect, nothing is sent.** **Once you connect, every conversation except the ones you exclude is sent (automatic mode).** To send only the ones you pick, switch to manual mode (`synclane sync mode manual`) before the first sync, or exclude projects/tools with the rules.
 - You connect by approving in your browser (the app never asks for a password). The device token is kept in the macOS keychain.
 - What is sent: the text of the conversation (your messages and the AI's replies), the title, the project path and the times. You can exclude any conversation at any time.
 - **Anything that looks like a secret is masked before sending.** API keys, tokens, private keys, passwords in URLs and assignments such as `password=…` or `…_key=…` are replaced with `[MASKED:kind]`. Only what is sent is masked; your local record and search are unchanged. It errs on the side of masking, so it may also mask something that is not a secret.

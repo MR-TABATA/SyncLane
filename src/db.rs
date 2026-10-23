@@ -210,7 +210,24 @@ fn configure(conn: &Connection) -> Result<()> {
     migrate(conn)?;
     ensure_tool_calls(conn)?;
     ensure_token_usage(conn)?;
+    ensure_sync_session_meta(conn)?;
     ensure_search_index(conn)
+}
+
+/// 送信完了した会話のメタデータ(送信日時 sent_at)。自動送信の会話に state='send' を強制付与せず追跡するための表。
+/// **スキーマの版は変えない**(無ければ作るだけ)。
+const SYNC_SESSION_META: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_session_meta (
+    server_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (server_id, session_id)
+);
+"#;
+
+pub fn ensure_sync_session_meta(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SYNC_SESSION_META)?;
+    Ok(())
 }
 
 /// ツールの呼び出し(実行したコマンド・触ったファイル・URL)。`tools.rs`。全文検索の索引・MCP・サーバー送信の対象ではない。

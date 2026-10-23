@@ -1,7 +1,7 @@
 //! 送信と登録の試験。サーバーは、メモリ上の見せかけ(FakeServer)で置き換える。
 
 use anyhow::{Result, anyhow};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -888,4 +888,47 @@ fn the_allow_and_block_files_beside_the_database_are_applied() {
     let content = server.ingest_calls()[0].body["events"][0]["content"].as_str().unwrap().to_string();
     assert_eq!(content, "PASSWORD=demo-pass-123 と PASSWORD=[MASKED:secret-assignment] と [MASKED:github-token] と [MASKED:blocklist] と [MASKED:blocklist]");
     assert_eq!((report.masked, report.allowed, report.block_lines_ignored), (4, 1, 1));
+}
+
+#[test]
+fn auto_mode_respects_later_added_exclusion_rules_for_already_sent_sessions() {
+    let env = env();
+    let id = add_session(&env.conn, "claude-code", "s1", &[("e1", "最初の発言")]);
+    set_session(&env.conn, id, "/work/private-app", Some("2026-10-20T00:00:00.000Z"));
+    store::set_mode(&env.conn, Mode::Auto).unwrap();
+
+    // 1回目の送信: auto モードで private-app の会話が送信される
+    let first = run(&env);
+    assert_eq!(first.events_sent, 1);
+    assert!(sent(&env, "claude-code", "e1"));
+
+    // 送信後も sync_sessions に state='send' が勝手に設定されていないことを確認
+    let explicit_state: Option<String> = env.conn.query_row(
+        "SELECT state FROM sync_sessions WHERE server_id = ?1 AND session_id = ?2",
+        rusqlite::params![SERVER, id],
+        |r| r.get(0),
+    ).optional().unwrap();
+    assert_eq!(explicit_state, None);
+
+    // 後から private-app を除外ルールに追加
+    store::set_rules(&env.conn, &store::Rules {
+        exclude_projects: vec!["/work/private-app".into()],
+        ..Default::default()
+    }).unwrap();
+
+    // 同じセッションに新しい発言を追加
+    env.conn.execute(
+        "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+         VALUES (?1, 'claude-code', 'e2', '2026-10-20T01:00:00.000Z', 'user', '秘密の発言', 2)",
+        [id],
+    ).unwrap();
+
+    // 除外ルールが正しく効いて、未送信件数が 0 件になっていることを確認
+    assert_eq!(store::counts(&env.conn, SERVER, Mode::Auto).unwrap().events_pending, 0);
+
+    // 送信を実行しても何も送られないことを確認
+    let second = run(&env);
+    assert_eq!(second.batches, 0);
+    assert_eq!(second.events_sent, 0);
+    assert!(!sent(&env, "claude-code", "e2"));
 }
