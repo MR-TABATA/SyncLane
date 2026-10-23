@@ -1,0 +1,25 @@
+name: Windows (experimental)
+
+# Windows でビルドとテストが通るかを確かめる。通常の CI(ci.yml)とは分けてあり、失敗しても main の CI には影響しない。
+# 手動で動かす(Actions タブの「Run workflow」)か、windows-trial ブランチへの push で動く。
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-trial]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+      # コマンド(画面なし)
+      - run: cargo build --locked --release
+      - run: cargo test --locked
+      # 画面(Tauri)。保存先の分岐などは、ここで通るかを見る
+      - run: cargo build --locked --release --manifest-path src-tauri/Cargo.toml
