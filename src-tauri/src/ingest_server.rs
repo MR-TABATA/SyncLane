@@ -12,11 +12,12 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 pub const ADDRESS: &str = "127.0.0.1:47821";
 pub const STORE_EXTENSION_ORIGIN: &str = "chrome-extension://jibhikabeebhfbhablfedojafekcmmog";
+pub const DEV_EXTENSION_ORIGIN: &str = "chrome-extension://dfnoacgnmmfhebepjdfpaaefdfdpjodm";
 const MAX_BODY: u64 = 8 * 1024 * 1024;
 
 /// 受け付ける拡張機能の Origin か。公開されている公式拡張機能、または環境変数で許可された開発用拡張機能に限る。
 pub fn is_allowed_origin(origin: &str) -> bool {
-    if origin == STORE_EXTENSION_ORIGIN {
+    if origin == STORE_EXTENSION_ORIGIN || origin == DEV_EXTENSION_ORIGIN {
         return true;
     }
     // 手で入れた拡張(開発用)は、ID を環境変数で足す(カンマ区切り)
