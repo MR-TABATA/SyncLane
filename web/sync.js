@@ -209,7 +209,7 @@
       list.append(el('label', { class: `sync-row ${row.state}` },
         box,
         el('span', { class: 'sync-name', title: name }, name),
-        el('span', { class: 'sync-meta' }, `${(row.started_at || '').slice(0, 10)} · ${row.source_tool} · ${t('srvEvents', row.events)}${row.unsent_events && row.state === 'send' ? ` · ${t('srvUnsent', row.unsent_events)}` : ''}`),
+        el('span', { class: 'sync-meta' }, `${(row.started_at || '').slice(0, 10)} · ${row.source_tool === 'copilot_cli' ? 'GitHub Copilot CLI' : row.source_tool} · ${t('srvEvents', row.events)}${row.unsent_events && row.state === 'send' ? ` · ${t('srvUnsent', row.unsent_events)}` : ''}`),
         el('span', { class: 'sync-state' }, stateLabel(row.state)),
       ));
     }

@@ -4,7 +4,7 @@
 
 **AIとの会話を、ぜんぶ残して、あとで探せる。**
 
-Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に1か所で保存する、無料のオープンソースアプリ(macOS)。キーワードや日付で探せるほか、AIに探させることもできます。
+Claude Code・Codex・GitHub Copilot CLI・Gemini・ChatGPT との会話を、自分の Mac の中に1か所で保存する、無料のオープンソースアプリ(macOS)。キーワードや日付で探せるほか、AIに探させることもできます。
 
 ![日付ごとのタイムライン。左があなたの入力、右がAIの応答](art/readme/ja/timeline.png)
 
@@ -25,6 +25,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 |---|---|
 | Claude Code | アプリ起動中、30秒ごとに自動(`~/.claude/projects`) |
 | Codex(Codex アプリ・Codex CLI) | アプリ起動中、30秒ごとに自動(`~/.codex/sessions`) |
+| GitHub Copilot CLI | アプリ起動中、30秒ごとに自動(`~/.copilot/session-state`) |
 | Gemini(ウェブ版)・ChatGPT(ウェブ版) | Chrome 拡張([手順](#geminichatgpt-の会話を取り込むchrome-拡張)) |
 | Gemini CLI | アプリ起動中、30秒ごとに自動(`~/.gemini/tmp`) |
 | Antigravity CLI(`agy`) | アプリ起動中、30秒ごとに自動(`~/.gemini/antigravity-cli`) |
@@ -37,7 +38,7 @@ Claude Code・Codex・Gemini・ChatGPT との会話を、自分の Mac の中に
 
 [mrktools.app/ja/synclane/download/](https://mrktools.app/ja/synclane/download/) から、dmg をダウンロードして、`SyncLane.app` を `/Applications` に入れます。署名・公証済みで、新しい版は、アプリが自動で知らせます。
 
-アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)と、Codex の新しい会話(`~/.codex/sessions`)、Gemini CLI の新しい会話(`~/.gemini/tmp`)、Antigravity CLI の新しい会話(`~/.gemini/antigravity-cli`)を取り込みます。
+アプリを起動しておくと、30秒ごとに、Claude Code の新しい会話(`~/.claude/projects`)、Codex の新しい会話(`~/.codex/sessions`)、GitHub Copilot CLI の新しい会話(`~/.copilot/session-state`)、Gemini CLI の新しい会話(`~/.gemini/tmp`)、Antigravity CLI の新しい会話(`~/.gemini/antigravity-cli`)を取り込みます。
 
 ## Gemini・ChatGPT の会話を取り込む(Chrome 拡張)
 
@@ -169,7 +170,7 @@ cargo build --release
 cargo run --manifest-path src-tauri/Cargo.toml
 ```
 
-保存先は `%LOCALAPPDATA%\SyncLane\synclane.db` です。取り込み元は、`%USERPROFILE%\.claude\projects`(Claude Code)、`%USERPROFILE%\.codex\sessions`(Codex)、`%USERPROFILE%\.gemini\tmp`(Gemini CLI)です。
+保存先は `%LOCALAPPDATA%\SyncLane\synclane.db` です。取り込み元は、`%USERPROFILE%\.claude\projects`(Claude Code)、`%USERPROFILE%\.codex\sessions`(Codex)、`%USERPROFILE%\.copilot\session-state`(GitHub Copilot CLI)、`%USERPROFILE%\.gemini\tmp`(Gemini CLI)です。
 
 ### テスト
 
@@ -214,6 +215,17 @@ SYNCLANE_DB=/tmp/synclane.db cargo run -- status
 cargo run -- import claude --date YYYY-MM-DD
 cargo run -- import claude --all
 ```
+
+### GitHub Copilot CLIログの取り込み
+
+`import copilot` は `~/.copilot/session-state/**/*.jsonl` を読み、`user.message` と `assistant.message` のテキストを取り込みます。アプリ起動中は同じ場所を30秒ごとに確認し、追記された行だけを取り込みます。ツール実行などのイベントは保存しません。会話は通常どおり SyncLane の同期対象にできます。
+
+```sh
+cargo run -- import copilot --date YYYY-MM-DD
+cargo run -- import copilot --all
+```
+
+GitHub Copilot CLI の新しい保存先は `~/.copilot/session-state` (`COPILOT_HOME` が設定されている場合は、そのフォルダの `session-state`)ですが、イベント JSONL の形式は公開仕様として確認できていません。この実装が扱うのは `type` が `user.message` / `assistant.message` で、時刻が記録された行です。別の CLI バージョンや旧 `history-session-state` の形式は取り込めない場合があります。必要なら `--root` で別の保存先を指定できます。Copilot の Web 版会話やブラウザー拡張には対応しません。
 
 ### Gemini CLIログの取り込み
 

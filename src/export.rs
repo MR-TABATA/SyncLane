@@ -227,6 +227,7 @@ fn tool_label(source: &str) -> &str {
         "antigravity_cli" => "Antigravity",
         "chatgpt_web" => "ChatGPT",
         "codex" => "Codex",
+        "copilot_cli" => "GitHub Copilot CLI",
         other => other,
     }
 }

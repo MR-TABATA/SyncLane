@@ -139,6 +139,18 @@ enum ImportSource {
         #[arg(long, conflicts_with = "date")]
         all: bool,
     },
+    /// Import GitHub Copilot CLI JSONL sessions.
+    Copilot {
+        /// Copilot CLI session-state directory. Defaults to ~/.copilot/session-state.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Import only events whose timestamp starts with YYYY-MM-DD.
+        #[arg(long)]
+        date: Option<String>,
+        /// Import all events in the Copilot CLI session-state directory.
+        #[arg(long, conflicts_with = "date")]
+        all: bool,
+    },
 }
 
 fn main() {
@@ -220,6 +232,17 @@ fn run() -> Result<()> {
                 let root = root.unwrap_or_else(synclane::paths::codex_sessions_dir);
                 let date_filter = if all { None } else { date.as_deref() };
                 let report = importer::import_codex(&root, date_filter, &mut conn)?;
+                println!("root: {}", root.display());
+                println!("scope: {}", date_filter.unwrap_or("all"));
+                println!("files: {}", report.files);
+                println!("sessions: {}", report.sessions);
+                println!("events added: {}", report.events);
+                println!("skipped lines: {}", report.skipped_lines);
+            }
+            ImportSource::Copilot { root, date, all } => {
+                let root = root.unwrap_or_else(synclane::paths::copilot_sessions_dir);
+                let date_filter = if all { None } else { date.as_deref() };
+                let report = importer::import_copilot(&root, date_filter, &mut conn)?;
                 println!("root: {}", root.display());
                 println!("scope: {}", date_filter.unwrap_or("all"));
                 println!("files: {}", report.files);

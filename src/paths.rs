@@ -73,6 +73,14 @@ pub fn codex_sessions_dir() -> PathBuf {
     home_dir().unwrap_or_default().join(".codex").join("sessions")
 }
 
+/// GitHub Copilot CLI の会話(`~/.copilot/session-state`)。
+pub fn copilot_sessions_dir() -> PathBuf {
+    std::env::var_os("COPILOT_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().unwrap_or_default().join(".copilot"))
+        .join("session-state")
+}
+
 /// Gemini CLI の会話(`~/.gemini/tmp`)。
 pub fn gemini_tmp_dir() -> PathBuf {
     home_dir().unwrap_or_default().join(".gemini").join("tmp")
@@ -147,6 +155,7 @@ mod tests {
             assert_eq!(app_data_dir(), Some(home.join("Library/Application Support/SyncLane")));
             assert_eq!(claude_projects_dir(), home.join(".claude/projects"));
             assert_eq!(codex_sessions_dir(), home.join(".codex/sessions"));
+            assert_eq!(copilot_sessions_dir(), home.join(".copilot/session-state"));
             assert_eq!(gemini_tmp_dir(), home.join(".gemini/tmp"));
         }
     }

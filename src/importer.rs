@@ -12,6 +12,7 @@ use crate::usage::{self, TokenUsage};
 const CLAUDE_TOOL: &str = "claude_code";
 const GEMINI_TOOL: &str = "gemini_cli";
 const CODEX_TOOL: &str = "codex";
+const COPILOT_TOOL: &str = "copilot_cli";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ImportReport {
@@ -776,6 +777,228 @@ pub fn import_codex(root: &Path, date: Option<&str>, conn: &mut Connection) -> R
             report.files += 1;
         }
         store_codex(conn, &path, &parsed, false, &mut report)?;
+    }
+    Ok(report)
+}
+
+// ---- GitHub Copilot CLI ----
+
+#[derive(Debug, Default)]
+pub struct CopilotParsed {
+    pub session_key: Option<String>,
+    pub project_path: Option<String>,
+    /// (event_id, occurred_at, role, content, sequence)
+    pub rows: Vec<(String, String, &'static str, String, i64)>,
+    pub next_offset: u64,
+    pub skipped_lines: usize,
+}
+
+/// Recursively find JSONL files below Copilot CLI's session-state directory.
+pub fn copilot_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if root.exists() {
+        collect_jsonl(root, &mut files)?;
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Parse complete JSONL events from `offset`. Unfinished final lines are read on the next pass.
+pub fn parse_copilot_file(path: &Path, offset: u64, date: Option<&str>) -> Result<CopilotParsed> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let size = file.metadata()?.len();
+    let offset = if offset > size { 0 } else { offset };
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    reader.seek(SeekFrom::Start(offset))?;
+
+    let mut parsed = CopilotParsed { next_offset: offset, ..Default::default() };
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 || line.last() != Some(&b'\n') {
+            break;
+        }
+        let sequence = parsed.next_offset as i64;
+        parsed.next_offset += read as u64;
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            parsed.skipped_lines += 1;
+            continue;
+        };
+        let data = value.get("data").or_else(|| value.get("payload")).unwrap_or(&Value::Null);
+        let session = value.get("session").or_else(|| data.get("session"));
+        if parsed.session_key.is_none() {
+            parsed.session_key = copilot_string(&value, &["sessionId", "session_id", "conversationId"])
+                .or_else(|| copilot_string(data, &["sessionId", "session_id", "conversationId"]))
+                .or_else(|| session.and_then(|session| copilot_string(session, &["id", "sessionId"])));
+        }
+        if parsed.project_path.is_none() {
+            parsed.project_path = copilot_string(&value, &["cwd", "workingDirectory", "projectPath", "workspace"])
+                .or_else(|| copilot_string(data, &["cwd", "workingDirectory", "projectPath", "workspace"]))
+                .or_else(|| session.and_then(|session| copilot_string(session, &["cwd", "workingDirectory", "projectPath", "workspace"])));
+        }
+
+        let event_type = value
+            .get("type")
+            .or_else(|| value.get("event"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let role = match event_type {
+            "user.message" | "user_message" => "user",
+            "assistant.message" | "assistant_message" => "assistant",
+            _ => continue,
+        };
+        let Some(occurred_at) = copilot_string(&value, &["timestamp", "createdAt", "occurredAt"])
+            .or_else(|| copilot_string(data, &["timestamp", "createdAt", "occurredAt"]))
+        else {
+            parsed.skipped_lines += 1;
+            continue;
+        };
+        if date.is_some_and(|wanted| !occurred_at.starts_with(wanted)) {
+            continue;
+        }
+        let content = data
+            .get("content")
+            .or_else(|| data.get("message"))
+            .or_else(|| data.get("text"))
+            .or_else(|| value.get("content"))
+            .or_else(|| value.get("message"))
+            .map(copilot_content)
+            .unwrap_or_default();
+        let content = content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let session_key = parsed.session_key.as_deref().unwrap_or_else(|| {
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .unwrap_or("copilot")
+        });
+        let event_key = copilot_string(&value, &["eventId", "messageId", "id"])
+            .or_else(|| copilot_string(data, &["eventId", "messageId", "id"]))
+            .unwrap_or_else(|| sequence.to_string());
+        parsed.rows.push((
+            format!("{session_key}:{event_key}"),
+            occurred_at,
+            role,
+            content.to_string(),
+            sequence,
+        ));
+    }
+    Ok(parsed)
+}
+
+fn copilot_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str).map(str::to_owned))
+}
+
+fn copilot_content(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(values) => values.iter().map(copilot_content).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n"),
+        Value::Object(object) => object
+            .get("text")
+            .or_else(|| object.get("content"))
+            .map(copilot_content)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+pub fn copilot_saved_offset(conn: &Connection, path: &Path) -> Result<u64> {
+    let offset: Option<i64> = conn
+        .query_row(
+            "SELECT byte_offset FROM collector_files WHERE source_tool = ?1 AND source_file = ?2",
+            params![COPILOT_TOOL, path.to_string_lossy()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(offset.unwrap_or(0).max(0) as u64)
+}
+
+pub fn store_copilot(
+    conn: &mut Connection,
+    path: &Path,
+    parsed: &CopilotParsed,
+    save_offset: bool,
+    report: &mut ImportReport,
+) -> Result<()> {
+    let source_file = path.to_string_lossy().into_owned();
+    let tx = conn.transaction()?;
+    if !parsed.rows.is_empty() {
+        let known_project: Option<String> = tx
+            .query_row(
+                "SELECT project_path FROM sessions WHERE source_tool = ?1 AND source_file = ?2",
+                params![COPILOT_TOOL, source_file],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let project = parsed.project_path.clone().or(known_project).unwrap_or_else(|| "(unknown)".to_string());
+        let key = parsed.session_key.clone().unwrap_or_else(|| {
+            path.parent().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or("copilot").to_string()
+        });
+        let (session_id, created) = find_or_create_session_for_tool(&tx, COPILOT_TOOL, &source_file, &project, &key)?;
+        if created {
+            report.sessions += 1;
+        }
+        for (event_id, occurred_at, role, content, sequence) in &parsed.rows {
+            report.events += tx.execute(
+                "INSERT OR IGNORE INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![session_id, COPILOT_TOOL, event_id, occurred_at, role, content, sequence],
+            )?;
+        }
+        if let Some((_, _, _, first, _)) = parsed.rows.iter().find(|row| row.2 == "user") {
+            let title: String = first.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
+            tx.execute("UPDATE sessions SET title = ?2 WHERE id = ?1 AND title IS NULL", params![session_id, title])?;
+        }
+    }
+    report.skipped_lines += parsed.skipped_lines;
+    if save_offset {
+        let saved: i64 = tx
+            .query_row(
+                "SELECT byte_offset FROM collector_files WHERE source_tool = ?1 AND source_file = ?2",
+                params![COPILOT_TOOL, source_file],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if parsed.next_offset as i64 != saved {
+            tx.execute(
+                "INSERT INTO collector_files(source_tool, source_file, byte_offset, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+                 ON CONFLICT(source_tool, source_file) DO UPDATE SET byte_offset = excluded.byte_offset, updated_at = CURRENT_TIMESTAMP",
+                params![COPILOT_TOOL, source_file, parsed.next_offset as i64],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn collect_copilot_incremental(root: &Path, conn: &mut Connection) -> Result<ImportReport> {
+    let mut report = ImportReport::default();
+    for path in copilot_files(root)? {
+        let offset = copilot_saved_offset(conn, &path)?;
+        let parsed = parse_copilot_file(&path, offset, None)?;
+        if parsed.next_offset > offset {
+            report.files += 1;
+        }
+        store_copilot(conn, &path, &parsed, true, &mut report)?;
+    }
+    Ok(report)
+}
+
+/// Import all Copilot CLI sessions, or only events on `date`. Does not save a read offset.
+pub fn import_copilot(root: &Path, date: Option<&str>, conn: &mut Connection) -> Result<ImportReport> {
+    let mut report = ImportReport::default();
+    for path in copilot_files(root)? {
+        let parsed = parse_copilot_file(&path, 0, date)?;
+        if !parsed.rows.is_empty() {
+            report.files += 1;
+        }
+        store_copilot(conn, &path, &parsed, false, &mut report)?;
     }
     Ok(report)
 }
@@ -1789,6 +2012,74 @@ mod tests {
         let parsed = parse_codex_file(&day.join("rollout-2026-10-20T20-00-00-xyz.jsonl"), 0, Some("2026-10-19"))?;
         assert!(parsed.calls.is_empty());
         std::fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn imports_copilot_cli_user_and_assistant_events_idempotently_and_filters_by_date() -> Result<()> {
+        let root = PathBuf::from(format!(".test-copilot-import-{}", std::process::id()));
+        let session = root.join("session-123");
+        std::fs::create_dir_all(&session)?;
+        let path = session.join("events.jsonl");
+        let lines = [
+            r#"{"type":"session.start","timestamp":"2026-10-20T01:00:00Z","data":{"sessionId":"session-123","cwd":"/work/copilot"}}"#,
+            r#"{"type":"user.message","id":"u1","timestamp":"2026-10-20T01:01:00Z","data":{"content":"調べてください"}}"#,
+            r#"{"type":"assistant.message","id":"a1","timestamp":"2026-10-20T01:02:00Z","data":{"content":[{"type":"text","text":"調査しました"}]}}"#,
+            r#"{"type":"tool.execution_complete","id":"tool1","timestamp":"2026-10-20T01:03:00Z","data":{"content":"ツール出力は保存しない"}}"#,
+            r#"{"type":"user.message","id":"u2","timestamp":"2026-10-21T01:01:00Z","data":{"content":"翌日の質問"}}"#,
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n")?;
+
+        let mut conn = db::open_memory()?;
+        let report = import_copilot(&root, Some("2026-10-20"), &mut conn)?;
+        assert_eq!((report.files, report.sessions, report.events), (1, 1, 2));
+        let rows: Vec<(String, String, String, String)> = conn
+            .prepare("SELECT source_tool, role, content, occurred_at FROM events ORDER BY sequence")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        assert_eq!(rows, [
+            ("copilot_cli".into(), "user".into(), "調べてください".into(), "2026-10-20T01:01:00Z".into()),
+            ("copilot_cli".into(), "assistant".into(), "調査しました".into(), "2026-10-20T01:02:00Z".into()),
+        ]);
+        let (project, title, source_hash): (String, String, String) = conn.query_row(
+            "SELECT project_path, title, source_hash FROM sessions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!((project.as_str(), title.as_str(), source_hash.as_str()), ("/work/copilot", "調べてください", "session-123"));
+        assert_eq!(import_copilot(&root, Some("2026-10-20"), &mut conn)?.events, 0);
+        assert_eq!(db::counts(&conn)?.events, 2);
+
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn copilot_cli_collector_reads_only_complete_appended_lines() -> Result<()> {
+        let root = PathBuf::from(format!(".test-copilot-incremental-{}", std::process::id()));
+        let session = root.join("session-456");
+        std::fs::create_dir_all(&session)?;
+        let path = session.join("events.jsonl");
+        let first = r#"{"type":"user.message","id":"u1","timestamp":"2026-10-20T01:00:00Z","data":{"sessionId":"session-456","cwd":"/work/app","content":"最初の質問"}}"#;
+        std::fs::write(&path, format!("{first}\n"))?;
+
+        let mut conn = db::open_memory()?;
+        assert_eq!(collect_copilot_incremental(&root, &mut conn)?.events, 1);
+        assert_eq!(collect_copilot_incremental(&root, &mut conn)?.files, 0);
+
+        let next = r#"{"type":"assistant.message","id":"a2","timestamp":"2026-10-20T01:01:00Z","data":{"content":"続きの回答"}}"#;
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+        writeln!(file, "{next}")?;
+        write!(file, r#"{{"type":"user.message","id":"u3","timestamp":"2026-10-20T01:02:00Z","data":{{"content":"途中"#)?;
+        drop(file);
+        assert_eq!(collect_copilot_incremental(&root, &mut conn)?.events, 1);
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
+        writeln!(file, r#""}}}}"#)?;
+        drop(file);
+        assert_eq!(collect_copilot_incremental(&root, &mut conn)?.events, 1);
+        assert_eq!(db::counts(&conn)?.events, 3);
+
+        std::fs::remove_dir_all(root)?;
         Ok(())
     }
 

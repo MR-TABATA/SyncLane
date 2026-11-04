@@ -364,6 +364,7 @@ fn main() {
                     }
                 }
                 let codex_root = synclane::paths::codex_sessions_dir();
+                let copilot_root = synclane::paths::copilot_sessions_dir();
                 let gemini_root = synclane::paths::gemini_tmp_dir();
                 let antigravity_root = synclane::paths::antigravity_cli_dir();
                 // ツールの呼び出し(実行したコマンド・触ったファイル)を、すでに取り込んだ会話にも、さかのぼって保存する(1 度だけ)
@@ -404,6 +405,16 @@ fn main() {
                     // Codex のログは数百 MB になる。読んで解析する間は DB のロックを持たず、書くときだけ持つ
                     // (初回の取り込みで、画面が固まらないように)
                     collect_codex(&collector_conn, &codex_root, &handle);
+                    // GitHub Copilot CLI の JSONL セッション。追記された行だけ読む
+                    if let Ok(mut conn) = collector_conn.lock() {
+                        match importer::collect_copilot_incremental(&copilot_root, &mut conn) {
+                            Ok(report) if report.events > 0 => {
+                                let _ = handle.emit("events-updated", report.events);
+                            }
+                            Ok(_) => {}
+                            Err(error) => eprintln!("synclane copilot: {error:#}"),
+                        }
+                    }
                     // Gemini CLI の記録は小さい。大きさが変わったファイルだけ、読み直す
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_gemini_incremental(&gemini_root, &mut conn) {

@@ -4,7 +4,7 @@
 
 **Keep every conversation you have with AI, and find it again.**
 
-SyncLane is a free, open-source Mac app that keeps your conversations with Claude Code, Codex, Gemini and ChatGPT in one place on your own computer. Search them by keyword or date, or let your AI search them for you.
+SyncLane is a free, open-source Mac app that keeps your conversations with Claude Code, Codex, GitHub Copilot CLI, Gemini and ChatGPT in one place on your own computer. Search them by keyword or date, or let your AI search them for you.
 
 ![A day-by-day timeline. Your input on the left, the AI's reply on the right](art/readme/en/timeline.png)
 
@@ -25,6 +25,7 @@ Only if you connect to a SyncLane server (for example one your company runs) are
 |---|---|
 | Claude Code | Automatic every 30 seconds while the app runs (`~/.claude/projects`) |
 | Codex (Codex app, Codex CLI) | Automatic every 30 seconds while the app runs (`~/.codex/sessions`) |
+| GitHub Copilot CLI | Automatic every 30 seconds while the app runs (`~/.copilot/session-state`) |
 | Gemini (web), ChatGPT (web) | Chrome extension ([how](#importing-gemini-and-chatgpt-conversations-chrome-extension)) |
 | Gemini CLI | Automatic every 30 seconds while the app runs (`~/.gemini/tmp`) |
 | Antigravity CLI (`agy`) | Automatic every 30 seconds while the app runs (`~/.gemini/antigravity-cli`) |
@@ -37,7 +38,7 @@ It saves your input and the AI's text replies. Tool output and the AI's reasonin
 
 Download the dmg from [mrktools.app/en/synclane/download/](https://mrktools.app/en/synclane/download/) and put `SyncLane.app` in `/Applications`. It is signed and notarized, and the app tells you when a new version is out.
 
-While the app is running, it imports new Claude Code conversations (`~/.claude/projects`), new Codex conversations (`~/.codex/sessions`), new Gemini CLI conversations (`~/.gemini/tmp`) and new Antigravity CLI conversations (`~/.gemini/antigravity-cli`) every 30 seconds.
+While the app is running, it imports new Claude Code conversations (`~/.claude/projects`), new Codex conversations (`~/.codex/sessions`), new GitHub Copilot CLI conversations (`~/.copilot/session-state`), new Gemini CLI conversations (`~/.gemini/tmp`) and new Antigravity CLI conversations (`~/.gemini/antigravity-cli`) every 30 seconds.
 
 ## Importing Gemini and ChatGPT conversations (Chrome extension)
 
@@ -169,7 +170,7 @@ cargo build --release
 cargo run --manifest-path src-tauri/Cargo.toml
 ```
 
-The database is at `%LOCALAPPDATA%\SyncLane\synclane.db`. It reads `%USERPROFILE%\.claude\projects` (Claude Code), `%USERPROFILE%\.codex\sessions` (Codex) and `%USERPROFILE%\.gemini\tmp` (Gemini CLI).
+The database is at `%LOCALAPPDATA%\SyncLane\synclane.db`. It reads `%USERPROFILE%\.claude\projects` (Claude Code), `%USERPROFILE%\.codex\sessions` (Codex), `%USERPROFILE%\.copilot\session-state` (GitHub Copilot CLI) and `%USERPROFILE%\.gemini\tmp` (Gemini CLI).
 
 ### Tests
 
@@ -214,6 +215,17 @@ SYNCLANE_DB=/tmp/synclane.db cargo run -- status
 cargo run -- import claude --date YYYY-MM-DD
 cargo run -- import claude --all
 ```
+
+### Importing GitHub Copilot CLI logs
+
+`import copilot` reads `~/.copilot/session-state/**/*.jsonl` and imports the text from `user.message` and `assistant.message` events. While the app is running, it checks the same directory every 30 seconds and reads only appended lines. Tool activity and other event types are not saved. Imported conversations can be synced like other sources.
+
+```sh
+cargo run -- import copilot --date YYYY-MM-DD
+cargo run -- import copilot --all
+```
+
+GitHub documents `~/.copilot/session-state` as the new session storage location (`$COPILOT_HOME/session-state` when `COPILOT_HOME` is set), but the event JSONL format is not confirmed as a public specification. This importer currently handles records with `type` set to `user.message` or `assistant.message` and a timestamp. Other CLI versions or the legacy `history-session-state` format may not be importable. Use `--root` to try another location. Copilot's web conversations and browser extension import are not supported.
 
 ### Importing Gemini CLI logs
 
