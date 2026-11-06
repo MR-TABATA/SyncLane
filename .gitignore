@@ -12,3 +12,9 @@ src-tauri/target/
 
 # 開発ビルドを試すときの、偽のホーム(架空の会話・試験用の DB・ログが入る)
 /dev-home/
+
+# claude.ai のエクスポートの展開物(氏名・メール・ログイン履歴・ダウンロード URL のトークン・会話本文が入る。コミットしない)
+/docs/light_metadata-*/
+/docs/manifest-*.json
+/docs/conversations.json
+/docs/claude_ai_import/__pycache__/
