@@ -29,6 +29,7 @@ Only if you connect to a SyncLane server (for example one your company runs) are
 | Gemini (web), ChatGPT (web) | Chrome extension ([how](#importing-gemini-and-chatgpt-conversations-chrome-extension)) |
 | Gemini CLI | Automatic every 30 seconds while the app runs (`~/.gemini/tmp`) |
 | Antigravity CLI (`agy`) | Automatic every 30 seconds while the app runs (`~/.gemini/antigravity-cli`) |
+| claude.ai (web) | Import the official data export (a zip or JSON) with the command `synclane import claude-ai <path>`. The command is not in the download, so build it from the source. Nothing is sent anywhere, and importing the same export again adds no duplicates. |
 
 The command (CLI) is **not included in the download (dmg)**. Build it from the source (see "Development" below). Use it, for example, to import past conversations again for a given date. The downloaded app only has the window and the MCP server (`--mcp`) your AI uses to search.
 

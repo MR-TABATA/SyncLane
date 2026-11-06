@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn tools_without_a_resume_command_give_none() {
         // Gemini CLI は、`command` が別に作る(`build` は扱わない)
-        for tool in ["gemini_cli", "gemini_web", "chatgpt_web", "unknown"] {
+        for tool in ["gemini_cli", "gemini_web", "chatgpt_web", "claude_ai", "unknown"] {
             assert_eq!(build(tool, "/work/app", Some("/a/b.jsonl"), Some("abc")), None, "{tool}");
         }
     }

@@ -139,6 +139,11 @@ enum ImportSource {
         #[arg(long, conflicts_with = "date")]
         all: bool,
     },
+    /// Import a claude.ai data export (conversations.json, a .zip, or a folder holding them). Local only; nothing is sent anywhere.
+    ClaudeAi {
+        /// The export: conversations.json, conversations-000.zip, or the folder they are in.
+        path: PathBuf,
+    },
     /// Import GitHub Copilot CLI JSONL sessions.
     Copilot {
         /// Copilot CLI session-state directory. Defaults to ~/.copilot/session-state.
@@ -238,6 +243,27 @@ fn run() -> Result<()> {
                 println!("sessions: {}", report.sessions);
                 println!("events added: {}", report.events);
                 println!("skipped lines: {}", report.skipped_lines);
+            }
+            ImportSource::ClaudeAi { path } => {
+                let report = synclane::claude_ai::import_claude_ai(&path, &mut conn)?;
+                println!("source: {}", path.display());
+                println!("files: {}", report.files);
+                println!("conversations: {}", report.conversations);
+                println!("events added: {}", report.inserted);
+                println!("events updated: {}", report.updated);
+                println!("empty conversations (nothing to save): {}", report.empty);
+                println!("skipped conversations: {}", report.skipped.len());
+                for skipped in &report.skipped {
+                    println!("  - {} ({}): {}", if skipped.title.is_empty() { "(no title)" } else { &skipped.title }, skipped.id, skipped.reason);
+                }
+                println!("failed files: {}", report.failed_files.len());
+                for failed in &report.failed_files {
+                    println!("  - {}: {}", failed.origin, failed.reason);
+                }
+                // 取り込めなかったものがあれば、スクリプトや定期実行が成功扱いにしないよう、非 0 で終わる(取り込めた分は保存済み)
+                if report.has_problems() {
+                    anyhow::bail!("取り込めなかったものがあります(会話 {} 件、ファイル {} 件)。上の一覧を確認してください", report.skipped.len(), report.failed_files.len());
+                }
             }
             ImportSource::Copilot { root, date, all } => {
                 let root = root.unwrap_or_else(synclane::paths::copilot_sessions_dir);

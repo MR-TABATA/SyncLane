@@ -1,3 +1,4 @@
+pub mod claude_ai;
 pub mod db;
 pub mod export;
 pub mod fuzzy;

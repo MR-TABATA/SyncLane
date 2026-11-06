@@ -29,6 +29,7 @@ Claude Code・Codex・GitHub Copilot CLI・Gemini・ChatGPT との会話を、�
 | Gemini(ウェブ版)・ChatGPT(ウェブ版) | Chrome 拡張([手順](#geminichatgpt-の会話を取り込むchrome-拡張)) |
 | Gemini CLI | アプリ起動中、30秒ごとに自動(`~/.gemini/tmp`) |
 | Antigravity CLI(`agy`) | アプリ起動中、30秒ごとに自動(`~/.gemini/antigravity-cli`) |
+| claude.ai(ウェブ版) | 公式エクスポートの zip か JSON を、コマンドで取り込む(`synclane import claude-ai <パス>`。コマンドは配布版に入っていないので、ソースから。通信はせず、同じエクスポートを取り込み直しても重複しません) |
 
 コマンド(CLI)は、**配布版(dmg)には入っていません**。ソースをビルドして使います(下の「開発」)。過去の会話を日付で取り込み直すときなどに使います。配布版のアプリは、画面と、AI から検索するための MCP(`--mcp`)だけです。
 

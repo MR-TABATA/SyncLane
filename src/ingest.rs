@@ -6,11 +6,17 @@ use std::collections::HashMap;
 /// ブラウザ拡張から届く、Web 版の会話。
 pub const GEMINI_WEB_TOOL: &str = "gemini_web";
 pub const CHATGPT_WEB_TOOL: &str = "chatgpt_web";
-const SOURCES: &[&str] = &[GEMINI_WEB_TOOL, CHATGPT_WEB_TOOL];
+/// claude.ai の公式エクスポートから取り込んだ会話(`claude_ai::import_claude_ai`)。
+pub const CLAUDE_AI_TOOL: &str = "claude_ai";
+const SOURCES: &[&str] = &[GEMINI_WEB_TOOL, CHATGPT_WEB_TOOL, CLAUDE_AI_TOOL];
 
 /// 会話の置き場所(画面では、プロジェクトの欄に出る)。
 fn host(source: &str) -> &'static str {
-    if source == CHATGPT_WEB_TOOL { "chatgpt.com" } else { "gemini.google.com" }
+    match source {
+        CHATGPT_WEB_TOOL => "chatgpt.com",
+        CLAUDE_AI_TOOL => "claude.ai",
+        _ => "gemini.google.com",
+    }
 }
 
 const MAX_MESSAGES: usize = 5000;
