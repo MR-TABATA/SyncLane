@@ -119,6 +119,7 @@
     .event-meta .title { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .event-actions { display: inline-flex; align-items: center; flex: none; white-space: nowrap; }
     .empty { color: var(--faint); padding: 40px 0; }
+    .fuzzy-note { color: var(--faint); font-size: 12px; padding: 8px 0 0; }
     .update-bar { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 10px 28px var(--shadow); font-size: 13px; }
     /* 設定(MrkDown と同じ作り: 左に項目、右に中身) */
     .overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / .45); }
@@ -415,7 +416,7 @@
       ja: {
         expand: '全文を表示', collapse: '折りたたむ', counts: (n, u, a) => `${n}件（あなた：${u}件　AI：${a}件）`, mcpIntro: 'Claude Code などの AI が、保存した過去の会話を検索できるようにします。AI に「前にどう決めたっけ」と聞くと、SyncLane から探して答えます。', mcpCommand: 'Claude Code に登録するコマンド', mcpDesktop: 'Claude アプリ（デスクトップ）の設定', mcpDesktopNote: '設定 → 開発者 → 「設定を編集」で開く claude_desktop_config.json に書き足し、Claude アプリを完全に終了して起動し直します。', mcpCopy: 'コピー', mcpCopied: 'コピーしました', mcpWarn: '登録すると、その AI は保存した全会話を読めるようになります。会話の中にパスワードやコードが含まれていないか、確認してから登録してください。通信は PC の中だけで、ネットワークには出ません。読み取り専用です。', mcpMove: 'アプリを別の場所に移したときは、登録し直してください。', roleUser: 'あなた', roleAssistant: 'AI', reload: '再読み込み', reloadNew: '再読み込み（新しい会話があります）', search: '検索（⌘F）', settings: '設定', close: '閉じる', dateMode: '日付条件', modeRange: '期間指定', modeAround: 'この頃（前後）',
         from: '開始', to: '終了', aroundDate: '基準日', aroundDays: '前後（日）', keyword: 'キーワード（スペース区切りでAND検索）', keywordExample: '例: SyncLane SQLite', sortLabel: '並び順', sortNewest: '新しい順', sortRelevance: '関連度順',
-        show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。',
+        show: '表示', clear: 'クリア', prev: '前を検索', next: '次を検索', loading: '読み込み中…', none: 'この条件の記録はありません。', fuzzyNote: '完全一致がなかったため、あいまい一致（誤字を許す）で表示しています。',
         needApp: 'Tauriアプリから起動してください。', loadFailed: '読み込みに失敗しました: ', updateRun: '更新して再起動',
         updateAvail: (v) => `新しい版 ${v} があります`, updating: '更新しています…', updateFailed: (e) => `更新できませんでした: ${e}`,
         titleEdit: '題名を編集', titleEditHeading: '題名を編集', titleSuggestLocal: '最近の発言から提案',
@@ -456,7 +457,7 @@
       en: {
         expand: 'Show all', collapse: 'Collapse', counts: (n, u, a) => `${n} events (You: ${u}  AI: ${a})`, mcpIntro: 'Lets AI tools such as Claude Code search the conversations you have saved. Ask the AI “how did we decide that?” and it looks in SyncLane.', mcpCommand: 'Command to register with Claude Code', mcpDesktop: 'Claude desktop app settings', mcpDesktopNote: 'Add this to claude_desktop_config.json (Settings → Developer → Edit Config), then quit the Claude app completely and reopen it.', mcpCopy: 'Copy', mcpCopied: 'Copied', mcpWarn: 'Once registered, that AI can read all of your saved conversations. Check that they contain no passwords or sensitive code first. Everything stays on this computer, and access is read-only.', mcpMove: 'If you move the app, register it again.', roleUser: 'You', roleAssistant: 'AI', reload: 'Reload', reloadNew: 'Reload (new conversations)', search: 'Search (⌘F)', settings: 'Settings', close: 'Close', dateMode: 'Date', modeRange: 'Date range', modeAround: 'Around a date',
         from: 'From', to: 'To', aroundDate: 'Date', aroundDays: 'Days either side', keyword: 'Keywords (space-separated, AND)', keywordExample: 'e.g. SyncLane SQLite', sortLabel: 'Sort', sortNewest: 'Newest first', sortRelevance: 'Most relevant',
-        show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.',
+        show: 'Show', clear: 'Clear', prev: 'Previous', next: 'Next', loading: 'Loading…', none: 'No records match.', fuzzyNote: 'No exact matches, showing fuzzy matches (typos allowed).',
         needApp: 'Please launch from the Tauri app.', loadFailed: 'Failed to load: ', updateRun: 'Update and restart',
         updateAvail: (v) => `Version ${v} is available`, updating: 'Updating…', updateFailed: (e) => `Update failed: ${e}`,
         titleEdit: 'Edit title', titleEditHeading: 'Edit title', titleSuggestLocal: 'Suggest from recent messages',
@@ -695,6 +696,8 @@
 
     let searchResults = [];
     let resultOrder = 'newest'; // いま表示している結果の並べ方(newest / relevance)
+    let fuzzyActive = false; // あいまい一致で探し直した結果を表示中
+    let fuzzyWarning = ''; // 探し直しの失敗・打ち切りの説明(あれば、結果の上に見せる)
     let selectedResult = -1;
     let loaded = false;
     let expanded = new Set(); // 全文を開いている行(一覧を引き直したら閉じる)
@@ -747,7 +750,12 @@
       const query = bySearch ? ($('query').value || null) : null;
       // 関連度順は、キーワードがあるときだけ。日付だけの表示は、これまでどおり時刻順(あなた／AI の組で並べる)
       resultOrder = query && $('sort').value === 'relevance' ? 'relevance' : 'newest';
-      const events = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query, limit: 100, sort: resultOrder, project: isSearchWindow ? null : activeProject });
+      const result = await invoke('timeline', { dateFrom: dates.from, dateTo: dates.to, query, limit: 100, sort: resultOrder, project: isSearchWindow ? null : activeProject });
+      // 応答の形は { events, fuzzy, warning }。古い形(配列)も受ける。どちらでもなければ、原因が分かる形で失敗させる
+      const events = Array.isArray(result?.events) ? result.events : (Array.isArray(result) ? result : null);
+      if (events === null) throw new Error(`timeline: 想定外の応答です (unexpected response): ${JSON.stringify(result)?.slice(0, 120)}`);
+      fuzzyActive = !!result?.fuzzy && events.length > 0;
+      fuzzyWarning = typeof result?.warning === 'string' ? result.warning : '';
       searchResults = events;
       expanded = new Set();
       selectedResult = events.length ? 0 : -1;
@@ -756,13 +764,15 @@
       updateSearchNav();
     }
     function renderEvents() {
-      if (!searchResults.length) { $('timeline').innerHTML = `<div class="empty">${t('none')}</div>`; return; }
+      const warningHtml = fuzzyWarning ? `<div class="fuzzy-note">${escapeHtml(fuzzyWarning)}</div>` : '';
+      if (!searchResults.length) { $('timeline').innerHTML = `<div class="empty">${t('none')}</div>${warningHtml}`; return; }
       const rows = [];
       for (let i = 0; i < searchResults.length;) {
         const current = searchResults[i];
         const next = searchResults[i + 1];
         // 関連度順では、隣り合う発言は、続きの会話とは限らない。組にせず、1 件ずつ並べる
-        if (resultOrder !== 'relevance' && current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
+        // あいまい一致も点数順なので、組にしない
+        if (resultOrder !== 'relevance' && !fuzzyActive && current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
           rows.push({ user: { e: next, index: i + 1 }, assistant: { e: current, index: i } });
           i += 2;
         } else if (current.role.toUpperCase() === 'USER') {
@@ -773,7 +783,7 @@
           i += 1;
         }
       }
-      $('timeline').innerHTML = `<div class="timeline-pairs"><div class="timeline-pair-head"><div>${roleLabel('USER')}</div><div>${roleLabel('ASSISTANT')}</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
+      $('timeline').innerHTML = `<div class="timeline-pairs">${fuzzyActive ? `<div class="fuzzy-note">${t('fuzzyNote')}</div>` : ''}${warningHtml}<div class="timeline-pair-head"><div>${roleLabel('USER')}</div><div>${roleLabel('ASSISTANT')}</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
       if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
     }
     function eventMarkup(e, index) {

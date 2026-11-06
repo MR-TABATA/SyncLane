@@ -111,7 +111,7 @@ fn tools() -> Value {
             "name": "search_conversations",
             "description": "ユーザーが過去に AI と交わした会話を、キーワードと日付で検索する。本文は抜粋。結果の並びは sort で選べる(手元の会話だけを探すときの既定は、関連度の高い順。サーバーの結果を含むときの既定は、新しい順)。\
                 ユーザー自身のプロジェクト名・製品名・過去の判断や経緯を聞かれたときは、ウェブ検索より先にこれを使う。\
-                query はスペース区切りで、すべてを含む会話だけが返る(AND)。見つからないときは、言い換えや別の言葉で何度か試すこと。\
+                query はスペース区切りで、すべてを含む会話だけが返る(AND)。完全一致が無いときは、あいまい一致(誤字の許容)で自動的に探し直す(fuzzy=off で止められる)。見つからないときは、言い換えや別の言葉で何度か試すこと。\
                 結果の session_id と event_id を get_session に渡すと、その前後の会話を読める。",
             "inputSchema": {
                 "type": "object",
@@ -122,7 +122,8 @@ fn tools() -> Value {
                     "limit": { "type": "integer", "description": format!("返す件数(既定 {DEFAULT_LIMIT}、最大 {MAX_LIMIT})。") },
                     "sort": { "type": "string", "enum": ["relevance", "newest"], "description": "並べ方。relevance=関連度の高い順(古い発言も、件数の上限で落ちにくい。3 文字以上の語があるときだけ。無ければ新しい順)、newest=新しい順。手元の会話だけを探すときの既定は relevance、サーバーの結果を含むときの既定は newest。relevance にしても、サーバーの結果には点数が無いので、手元の結果のあとに、新しい順で並ぶ。" },
                     "project": { "type": "string", "description": "このプロジェクトの会話だけに絞る(名前でも場所でもよい。list_projects で確かめられる)。複数に当たるときは候補を返すので、場所で指定し直す。手元の会話だけに効く(scope は local のみ)。" },
-                    "scope": { "type": "string", "enum": ["local", "team", "all"], "description": "探す範囲。local=手元の自分の会話だけ、team=サーバーの会話(同僚の会話を含む)、all=両方。サーバーに接続していれば既定は all、していなければ local。project を指定するときは local だけ。" }
+                    "scope": { "type": "string", "enum": ["local", "team", "all"], "description": "探す範囲。local=手元の自分の会話だけ、team=サーバーの会話(同僚の会話を含む)、all=両方。サーバーに接続していれば既定は all、していなければ local。project を指定するときは local だけ。" },
+                    "fuzzy": { "type": "string", "enum": ["auto", "off"], "description": "あいまい一致(誤字の許容)。auto=完全一致が無いときだけ探し直す(既定)、off=探し直さない。" }
                 }
             }
         },
@@ -303,6 +304,11 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
         None => db::SearchOrder::Newest,
         Some(other) => return Err(format!("sort は relevance か newest です(受け取った値: {other})")),
     };
+    let fuzzy = match args.get("fuzzy").and_then(Value::as_str) {
+        None | Some("auto") => true,
+        Some("off") => false,
+        Some(other) => return Err(format!("fuzzy は auto か off です(受け取った値: {other})")),
+    };
     // date_to は「その日を含む」で受け、手元の DB には翌日の0時(含まない)として渡す。サーバーには、そのまま渡す(サーバーも「含む」)
     let to_exclusive = to.as_deref().map(next_day).transpose()?;
     let terms: Vec<&str> = query.map(|q| q.split_whitespace().collect()).unwrap_or_default();
@@ -310,10 +316,17 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
     let mut rows: Vec<Row> = Vec::new();
     let mut keys: HashMap<(String, String), usize> = HashMap::new();
     let mut ranked = false;
+    let mut fuzzy_ran = false;
+    let mut fuzzy_warning: Option<String> = None;
     if scope != Scope::Team {
         ranked = order == db::SearchOrder::Relevance && db::can_rank(query);
-        let events = db::timeline_in_project(conn, from.as_deref(), to_exclusive.as_deref(), project_row.as_ref().map(|p| p.project_path.as_str()), query, limit, order).map_err(|e| e.to_string())?;
-        for e in &events {
+        let hits = db::timeline_search(conn, from.as_deref(), to_exclusive.as_deref(), project_row.as_ref().map(|p| p.project_path.as_str()), query, limit, order, fuzzy).map_err(|e| e.to_string())?;
+        fuzzy_ran = hits.fuzzy;
+        fuzzy_warning = hits.warning.clone();
+        if hits.fuzzy {
+            ranked = true; // あいまい一致の点数順を崩さない
+        }
+        for e in &hits.events {
             keys.insert((e.source_tool.clone(), e.source_event_id.clone()), rows.len());
             rows.push(local_row(e, excerpt(&e.content, &terms, EXCERPT_CHARS), false));
         }
@@ -348,12 +361,20 @@ fn search_conversations(conn: &Connection, remote: Option<&Remote>, args: &Value
     }
     rows.truncate(limit);
 
-    let note = team_note.map(|m| format!("\n[サーバーの結果は含まれません: {m}]")).unwrap_or_default();
+    let mut note = team_note.map(|m| format!("\n[サーバーの結果は含まれません: {m}]")).unwrap_or_default();
+    if let Some(warning) = &fuzzy_warning {
+        note.push_str(&format!("\n[{warning}]"));
+    }
     if rows.is_empty() {
-        return Ok(format!("{NOTICE}\n\n{project_line}該当する記録はありません。言い換えや別のキーワードで試してください。{note}"));
+        let tried = if fuzzy_ran { "（あいまい一致でも探しました）" } else { "" };
+        return Ok(format!("{NOTICE}\n\n{project_line}該当する記録はありません{tried}。言い換えや別のキーワードで試してください。{note}"));
     }
     let show_origin = scope != Scope::Local;
-    let order_label = if !ranked {
+    let order_label = if fuzzy_ran && scope == Scope::Local {
+        "あいまい一致の順（完全一致はありませんでした）"
+    } else if fuzzy_ran {
+        "手元の結果はあいまい一致の順、そのあとにサーバーだけの結果が新しい順（完全一致はありませんでした）"
+    } else if !ranked {
         "新しい順"
     } else if scope == Scope::Local {
         "関連度の高い順"
@@ -577,6 +598,33 @@ mod tests {
         assert!(none["content"][0]["text"].as_str().unwrap().contains("該当する記録はありません"));
         let bad = call(&conn, "search_conversations", json!({ "date_from": "2026/10/13" }));
         assert_eq!(bad["isError"], true);
+    }
+
+    #[test]
+    fn fuzzy_finds_a_typo_labels_the_order_and_can_be_turned_off() {
+        let conn = conn_with_data();
+        // 「認承」は「認証」の誤字。完全一致は無い
+        let found = call(&conn, "search_conversations", json!({ "query": "認承" }));
+        assert_eq!(found["isError"], false);
+        let text = found["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("あいまい一致の順（完全一致はありませんでした）"), "{text}");
+        assert!(text.contains("ログインの認証をどうする?"), "{text}");
+        // off なら、探し直さない
+        let off = call(&conn, "search_conversations", json!({ "query": "認承", "fuzzy": "off" }));
+        let text = off["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("該当する記録はありません。"), "{text}");
+        assert!(!text.contains("あいまい一致"), "{text}");
+        // 知らない値は断る
+        let bad = call(&conn, "search_conversations", json!({ "query": "認承", "fuzzy": "sometimes" }));
+        assert_eq!(bad["isError"], true);
+    }
+
+    #[test]
+    fn fuzzy_reports_when_it_also_finds_nothing() {
+        let conn = conn_with_data();
+        let none = call(&conn, "search_conversations", json!({ "query": "存在しない言葉" }));
+        let text = none["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("該当する記録はありません（あいまい一致でも探しました）。"), "{text}");
     }
 
     /// 3 つのプロジェクト(同じ名前の `app` が 2 つ)と、Codex の会話 1 本。
@@ -833,6 +881,27 @@ mod tests {
         let (method, url, body) = t.calls.borrow()[0].clone();
         assert_eq!((method.as_str(), url.as_str()), ("POST", "https://s.example.com/api/v1/search"));
         assert!(body.unwrap().contains("認証"));
+    }
+
+    #[test]
+    fn all_puts_fuzzy_local_hits_before_the_server_only_hits_and_labels_the_order() {
+        let conn = conn_with_data();
+        // 「認承」は「認証」の誤字。手元は完全一致が無いのであいまい一致、サーバーには同僚だけの発言がある
+        let t = FakeTransport::new(vec![ok(json!({"items": [
+            team_item(901, "x1", "2026-10-15T09:00:00Z", "同僚の発言", "田中", false),
+        ]}))]);
+        let remote = Remote::new("https://s.example.com", "search-token", &t);
+        let out = text(&call_with(&conn, Some(&remote), "search_conversations", json!({ "query": "認承" })));
+        assert!(out.contains("手元の結果はあいまい一致の順、そのあとにサーバーだけの結果が新しい順（完全一致はありませんでした）"), "{out}");
+        assert!(out.contains("ログインの認証をどうする") && out.contains("同僚の発言"), "{out}");
+        assert!(out.find("ログインの認証").unwrap() < out.find("同僚の発言").unwrap(), "手元のあいまい一致が先: {out}");
+        // fuzzy=off なら、手元は探し直さず、サーバーの結果だけが並ぶ
+        let t = FakeTransport::new(vec![ok(json!({"items": [
+            team_item(901, "x1", "2026-10-15T09:00:00Z", "同僚の発言", "田中", false),
+        ]}))]);
+        let remote = Remote::new("https://s.example.com", "search-token", &t);
+        let off = text(&call_with(&conn, Some(&remote), "search_conversations", json!({ "query": "認承", "fuzzy": "off" })));
+        assert!(!off.contains("あいまい一致") && !off.contains("ログインの認証をどうする") && off.contains("同僚の発言"), "{off}");
     }
 
     #[test]

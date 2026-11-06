@@ -1,5 +1,6 @@
 pub mod db;
 pub mod export;
+pub mod fuzzy;
 pub mod importer;
 pub mod ingest;
 pub mod mcp;

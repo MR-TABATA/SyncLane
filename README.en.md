@@ -77,7 +77,7 @@ You can also install it by hand without the store (for developers):
 
 ## How search works
 
-It has a full-text index, and Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger.
+It has a full-text index, and Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger. When nothing matches exactly, it automatically retries with a typo-tolerant fuzzy match.
 
 ## Editing conversation titles
 
@@ -131,7 +131,7 @@ Your AI gets four tools (all read-only):
 
 | Tool | What it does |
 |---|---|
-| `search_conversations` | Search conversations by keyword. Add `project` to limit it to one project |
+| `search_conversations` | Search conversations by keyword (retries with a fuzzy match when nothing matches exactly). Add `project` to limit it to one project |
 | `get_session` | Read around a conversation you found |
 | `list_projects` | List projects (name, location, number of conversations, tools used, last activity) |
 | `get_project_context` | A project's recent state (titles of recent conversations and their last exchange) |

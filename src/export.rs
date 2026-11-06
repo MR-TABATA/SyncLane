@@ -387,7 +387,14 @@ pub struct Range<'a> {
 /// 1 つの話題は、`section_markdown` と同じ書き方で、見出しの深さだけが違う(`##`)。話題の全体を書き出すので、範囲の端をまたぐ話題は、範囲の外の発言も含む。
 /// 話題は、新しいほうから `MAX_SECTIONS` 件まで。依頼文(`options.prompt`)は、全体の先頭に 1 回だけ付く。
 pub fn range_markdown(conn: &Connection, range: &Range, options: &Options) -> Result<Exported> {
-    let events = crate::db::timeline_in_project(conn, range.date_from, range.date_to, range.project, range.query, MAX_EVENTS, crate::db::SearchOrder::Newest)?;
+    // 画面の一覧と同じ探し方(完全一致が無ければ、あいまい一致で探し直す)
+    let hits = crate::db::timeline_search(conn, range.date_from, range.date_to, range.project, range.query, MAX_EVENTS, crate::db::SearchOrder::Newest, true)?;
+    let mut events = hits.events;
+    if hits.fuzzy {
+        // あいまい一致の結果は点数順。話題は「当たった発言を新しい順に見て、新しいほうから MAX_SECTIONS 件」拾う作りなので、
+        // 時刻の新しい順に並べ直す(安定ソート。同時刻は点数順のまま)
+        events.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+    }
     // 当たった発言(新しい順)から、話題を新しい順に拾う
     let mut seen = std::collections::HashSet::new();
     let mut starts: Vec<i64> = Vec::new();
@@ -623,6 +630,19 @@ mod tests {
         // 注意書きは、冒頭に 1 回だけ
         let note = labels(Lang::Ja).not_included;
         assert_eq!(md.matches(note).count(), 1, "{md}");
+    }
+
+    #[test]
+    fn a_range_with_a_typo_query_falls_back_to_fuzzy_matches_and_keeps_the_sections_oldest_first() {
+        let (conn, _, _) = two_sections();
+        // 完全一致が無い誤字でも、近い綴りの話題を拾う。「次の話題です」の「話題」を、誤字の「話提」で探す
+        let hit = range_markdown(&conn, &Range { query: Some("話提です"), ..Range::default() }, &Options::default()).unwrap();
+        assert!(hit.markdown.contains("次の話題です"), "{}", hit.markdown);
+        // 当たりが無い語は、これまでどおり断る
+        assert!(range_markdown(&conn, &Range { query: Some("存在しない言葉"), ..Range::default() }, &Options::default()).is_err());
+        // 点数順に返ったあいまい一致の結果でも、書き出しは古い話題が先(新しい順に拾ってから、古い順に並べる)
+        let both = range_markdown(&conn, &Range { query: Some("ビルト"), ..Range::default() }, &Options::default()).unwrap();
+        assert!(both.markdown.contains("ビルドが通らない"), "{}", both.markdown);
     }
 
     #[test]

@@ -2,7 +2,6 @@ mod ingest_server;
 mod sync_app;
 
 use synclane::{db, importer};
-use synclane::db::TimelineEvent;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -40,6 +39,7 @@ fn status(state: tauri::State<'_, AppState>) -> Result<AppInfo, String> {
     })
 }
 
+/// 一覧の検索。完全一致が 1 件も無いときは、あいまい一致で探し直す(`fuzzy` が true のときに、その旨を画面に出す)。
 #[tauri::command]
 fn timeline(
     date_from: Option<String>,
@@ -49,10 +49,10 @@ fn timeline(
     sort: Option<String>,
     project: Option<String>,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<TimelineEvent>, String> {
+) -> Result<db::SearchHits, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let order = if sort.as_deref() == Some("relevance") { db::SearchOrder::Relevance } else { db::SearchOrder::Newest };
-    db::timeline_in_project(&conn, date_from.as_deref(), date_to.as_deref(), project.as_deref(), query.as_deref(), limit, order).map_err(|e| e.to_string())
+    db::timeline_search(&conn, date_from.as_deref(), date_to.as_deref(), project.as_deref(), query.as_deref(), limit, order, true).map_err(|e| e.to_string())
 }
 
 /// トークン数の集計(期間・単位別)。読み取りだけ。`group_by` は `day` / `project` / `model` / `tool`。`utc_offset_minutes` は、日別を端末の時刻で切るための時差。

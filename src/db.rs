@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -483,6 +485,185 @@ pub fn timeline_in_project(
     search_events_in(conn, date_from, date_to, project, query, limit, has_search_index(conn), order)
 }
 
+/// 検索の結果。`fuzzy` が true なら、完全一致が 1 件も無かったため、あいまい一致で探し直したもの
+/// (探し直しても当たらないときも true。画面と MCP は、件数と組み合わせて文面を変える)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SearchHits {
+    pub events: Vec<TimelineEvent>,
+    pub fuzzy: bool,
+    /// 探し直しがうまくいかなかった(失敗した・一部しか探せなかった)ときの説明。画面と MCP が、そのまま利用者に見せる。
+    /// 失敗のときは `events` が空で `fuzzy` が false(完全一致の結果をそのまま返す)。
+    pub warning: Option<String>,
+}
+
+/// あいまい一致で走査する行数の上限(新しい順)。索引を使えない全件走査が、DB 全体のロックを握ったまま長引かないようにする。
+pub const FUZZY_SCAN_LIMIT: usize = 50_000;
+
+/// 画面・MCP・書き出しの検索の入口。完全一致で探し、1 件も無いときだけ、あいまい一致(誤字の許容)で探し直す。
+/// 完全一致で当たったときは、結果も並びも、従来どおり(何も変えない)。
+/// - `allow_fuzzy` が false(MCP の `fuzzy: off`)なら、探し直さない
+/// - 検索語が無い(日付だけ)とき、あいまいに探せる語が無い(1 文字だけなど)ときも、探し直さない
+#[allow(clippy::too_many_arguments)]
+pub fn timeline_search(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+    order: SearchOrder,
+    allow_fuzzy: bool,
+) -> Result<SearchHits> {
+    let events = search_events_in(conn, date_from, date_to, project, query, limit, has_search_index(conn), order)?;
+    if !events.is_empty() || !allow_fuzzy || !can_fuzzy(query) {
+        return Ok(SearchHits { events, fuzzy: false, warning: None });
+    }
+    // あいまい一致は補助。失敗しても、完全一致が成功して「0 件」だった事実は届ける(原因は warning に入れる)
+    match fuzzy_scan(conn, date_from, date_to, project, query, limit) {
+        Ok((events, truncated)) => {
+            let warning = truncated.then(|| format!("あいまい一致は、新しい順に {FUZZY_SCAN_LIMIT} 件までしか探していません(Fuzzy search looked only at the newest {FUZZY_SCAN_LIMIT} events)。期間やプロジェクトで絞ると、全体を探せます。"));
+            Ok(SearchHits { events, fuzzy: true, warning })
+        }
+        Err(error) => {
+            eprintln!("あいまい一致の探し直しに失敗しました: {error:#}");
+            Ok(SearchHits { events: Vec::new(), fuzzy: false, warning: Some(format!("あいまい一致で探し直せませんでした(Fuzzy search failed): {error:#}")) })
+        }
+    }
+}
+
+/// この検索語に、あいまいに探せる語(2〜64 文字)があるか。
+fn can_fuzzy(query: Option<&str>) -> bool {
+    query.unwrap_or_default().split_whitespace().any(|term| crate::fuzzy::max_errors(term.chars().count()).is_some())
+}
+
+/// あいまい一致の検索(誤字の許容)。完全一致が無いときの、探し直し用。
+/// 語ごとに、本文・題名・プロジェクトの場所のどこかに近い綴りがある発言を、近い順に返す(同じ近さなら新しい順)。
+/// 日付とプロジェクトの絞り込みは、完全一致と同じ。索引は使わない(語の断片では、索引を引けないため)。
+pub fn timeline_fuzzy_in_project(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TimelineEvent>> {
+    Ok(fuzzy_scan(conn, date_from, date_to, project, query, limit)?.0)
+}
+
+/// `timeline_fuzzy_in_project` の本体。2 つ目の値は、走査の上限(`FUZZY_SCAN_LIMIT`)で打ち切ったか。
+fn fuzzy_scan(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<TimelineEvent>, bool)> {
+    let terms: Vec<crate::fuzzy::QueryTerm> = query.unwrap_or_default().split_whitespace().filter(|term| !term.is_empty()).map(crate::fuzzy::QueryTerm::new).collect();
+    if terms.is_empty() || limit == 0 {
+        return Ok((Vec::new(), false));
+    }
+    let project = project.filter(|p| !p.is_empty());
+    let mut sql = String::from(
+        "SELECT e.session_id, e.occurred_at, e.source_tool, s.project_path, e.role, e.content, s.title, e.id, e.source_event_id
+         FROM events e
+         JOIN sessions s ON s.id = e.session_id",
+    );
+    let mut conditions: Vec<String> = Vec::new();
+    if date_from.is_some() {
+        conditions.push("e.occurred_at >= ?".to_owned());
+    }
+    if date_to.is_some() {
+        conditions.push("e.occurred_at < ?".to_owned());
+    }
+    if project.is_some() {
+        conditions.push("s.project_path = ?".to_owned());
+    }
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+    sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(date) = date_from {
+        values.push(Box::new(day_bound(date)));
+    }
+    if let Some(date) = date_to {
+        values.push(Box::new(day_bound(date)));
+    }
+    if let Some(project) = project {
+        values.push(Box::new(project.to_owned()));
+    }
+    // 新しい順に流し読みして、点数の上位だけ残す(使う記憶は、件数の上限分だけ)
+    let mut heap: BinaryHeap<Reverse<Scored>> = BinaryHeap::new();
+    let mut seen: u64 = 0;
+    let mut scanned: usize = 0;
+    let mut truncated = false;
+    let mut buffer = String::new(); // 行ごとに確保せず、使い回す
+    let mut rows = stmt.query(rusqlite::params_from_iter(values.iter()))?;
+    while let Some(row) = rows.next()? {
+        if scanned >= FUZZY_SCAN_LIMIT {
+            truncated = true;
+            break;
+        }
+        scanned += 1;
+        let event = row_to_timeline_event(row)?;
+        if let Some(points) = fuzzy_points(&terms, &event, &mut buffer) {
+            heap.push(Reverse(Scored { points, at: event.occurred_at.clone(), seq: seen, event }));
+            seen += 1;
+            if heap.len() > limit {
+                heap.pop(); // 最も点の低いものを捨てる
+            }
+        }
+    }
+    let mut scored: Vec<Scored> = heap.into_iter().map(|r| r.0).collect();
+    scored.sort_by(|a, b| b.cmp(a)); // ヒープの取り出し順は不同なので、並べ直す
+    let mut events: Vec<TimelineEvent> = scored.into_iter().map(|s| s.event).collect();
+    crate::sections::attach(conn, &mut events)?;
+    Ok((events, truncated))
+}
+
+/// あいまい一致の 1 行。点数が高い・新しい・(同時刻なら)後に書かれたものほど、上位。
+struct Scored {
+    points: i64,
+    at: String,
+    seq: u64, // 新しい順の通し番号。小さいほど新しい
+    event: TimelineEvent,
+}
+
+impl PartialEq for Scored {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for Scored {}
+impl PartialOrd for Scored {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Scored {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.points.cmp(&other.points).then_with(|| self.at.cmp(&other.at)).then_with(|| other.seq.cmp(&self.seq))
+    }
+}
+
+/// 発言の近さ(語ごとの点数の合計)。どれか 1 語でも当たらない(AND)ときは None。
+/// 探す先は、本文・題名・プロジェクトの場所(完全一致と同じ OR)。1 度だけ小文字にする。
+fn fuzzy_points(terms: &[crate::fuzzy::QueryTerm], event: &TimelineEvent, buffer: &mut String) -> Option<i64> {
+    // 連結した 1 本の文字列を作らず、バッファに小文字を直接書く(行ごとの確保と複製を避ける)
+    buffer.clear();
+    for part in [event.content.as_str(), "\n", event.title.as_deref().unwrap_or(""), "\n", event.project_path.as_str()] {
+        buffer.extend(part.chars().flat_map(|c| c.to_lowercase()));
+    }
+    let mut total = 0;
+    for term in terms {
+        total += term.points(buffer)?;
+    }
+    Some(total)
+}
+
 /// この検索語に、関連度の点数を付けられるか(検索語がある)。検索語が無い(日付だけ)ときは、関連度順を頼んでも、新しい順になる。
 pub fn can_rank(query: Option<&str>) -> bool {
     query.unwrap_or_default().split_whitespace().next().is_some()
@@ -935,6 +1116,255 @@ mod tests {
         // 2 つの語: 両方が本文に何度も出る発言が先頭
         let two = timeline_range_ordered(&conn, None, None, Some("SQLite 検索順位"), 10, SearchOrder::Relevance)?;
         assert_eq!(two.first().map(|e| e.source_event_id.as_str()), Some("r0"));
+        Ok(())
+    }
+
+    fn fuzzy_corpus(conn: &Connection) {
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude_code', '/work/app', 'a.jsonl', 'a')", []).unwrap();
+        let app = conn.last_insert_rowid();
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('codex', '/work/other', 'b.jsonl', 'b')", []).unwrap();
+        let other = conn.last_insert_rowid();
+        for (i, (session, key, at, role, content)) in [
+            (app, "e1", "2026-10-20T01:00:00.000Z", "user", "how to configure authentication in this app"),
+            (app, "e2", "2026-10-21T01:00:00.000Z", "assistant", "authentication is done via the login page"),
+            (other, "e3", "2026-10-22T01:00:00.000Z", "user", "認証の方式を決める"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', ?2, ?3, ?4, ?5, ?6)",
+                params![session, key, at, role, content, i as i64],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn exact_hits_keep_their_results_and_order_and_do_not_fall_back() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("authentication"), 30, SearchOrder::Newest, true)?;
+        assert!(!hits.fuzzy);
+        assert_eq!(hits.events.len(), 2);
+        assert!(hits.events[0].content.contains("login page")); // 新しい順
+        assert!(hits.events[1].content.contains("in this app"));
+        let ranked = timeline_search(&conn, None, None, None, Some("authentication"), 30, SearchOrder::Relevance, true)?;
+        assert!(!ranked.fuzzy);
+        assert_eq!(ranked.events.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn typo_queries_fall_back_and_find_the_close_spellings() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 2);
+        // 同じ近さなので、新しい順
+        assert!(hits.events[0].content.contains("login page"));
+        assert!(hits.events[1].content.contains("in this app"));
+        let japanese = timeline_search(&conn, None, None, None, Some("認承"), 30, SearchOrder::Newest, true)?;
+        assert!(japanese.fuzzy);
+        assert_eq!(japanese.events.len(), 1);
+        assert!(japanese.events[0].content.contains("認証の方式"));
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_prefers_the_closer_spelling_over_the_newer_event() -> Result<()> {
+        let conn = open_memory()?;
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude_code', '/w', 'a.jsonl', 'a')", [])?;
+        let session = conn.last_insert_rowid();
+        for (i, (key, at, content)) in [
+            ("old", "2026-10-20T01:00:00.000Z", "memo about authneticatio settings"), // 語の 1 文字欠け(距離 1)
+            ("new", "2026-10-22T01:00:00.000Z", "memo about authentication settings"), // 語に 2 文字違い(距離 2)
+        ]
+        .iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', ?2, ?3, 'user', ?4, ?5)",
+                params![session, key, at, content, i as i64],
+            )?;
+        }
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 2);
+        assert!(hits.events[0].content.contains("authneticatio settings")); // 近いほう(古い)が先
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_respects_the_date_and_project_filters() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, Some("2026-10-21"), None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 1);
+        assert!(hits.events[0].content.contains("login page"));
+        let hits = timeline_search(&conn, None, None, Some("/work/other"), Some("authnetication"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert!(hits.events.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_requires_every_term() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication login"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 1); // e2 だけ("login" を含む)
+        assert!(hits.events[0].content.contains("login page"));
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication 存在しない語"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert!(hits.events.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_also_searches_titles() -> Result<()> {
+        let conn = open_memory()?;
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash, title) VALUES ('claude_code', '/w', 'a.jsonl', 'a', 'authentication について')", [])?;
+        let session = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'e', '2026-10-20T01:00:00.000Z', 'user', '今日の作業メモ', 0)",
+            [session],
+        )?;
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn single_character_queries_do_not_fall_back() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("ぬ"), 30, SearchOrder::Newest, true)?;
+        assert!(!hits.fuzzy);
+        assert!(hits.events.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_fallback_can_be_turned_off() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, false)?;
+        assert!(!hits.fuzzy);
+        assert!(hits.events.is_empty());
+        Ok(())
+    }
+
+    fn insert_events(conn: &Connection, rows: &[(&str, &str, &str)]) {
+        conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude_code', '/w', 'a.jsonl', 'a')", []).unwrap();
+        let session = conn.last_insert_rowid();
+        for (i, (key, at, content)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', ?2, ?3, 'user', ?4, ?5)",
+                params![session, key, at, content, i as i64],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn fuzzy_limit_keeps_the_closest_spelling_and_drops_the_rest() -> Result<()> {
+        let conn = open_memory()?;
+        // 距離 1 の古い発言 1 件と、距離 2 の新しい発言 2 件。上限 1 なら、距離 1 だけが残る
+        insert_events(&conn, &[
+            ("close-old", "2026-10-20T01:00:00.000Z", "memo about authneticatio settings"),
+            ("far-new-1", "2026-10-22T01:00:00.000Z", "memo about authentication settings"),
+            ("far-new-2", "2026-10-23T01:00:00.000Z", "memo about authentication settings"),
+        ]);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 1, SearchOrder::Newest, true)?;
+        assert!(hits.fuzzy);
+        assert_eq!(hits.events.len(), 1);
+        assert_eq!(hits.events[0].source_event_id, "close-old");
+        // 上限 2 なら、近い順に 2 件(距離 1 の古い発言 → 距離 2 のうち新しいほう)
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 2, SearchOrder::Newest, true)?;
+        let keys: Vec<&str> = hits.events.iter().map(|e| e.source_event_id.as_str()).collect();
+        assert_eq!(keys, ["close-old", "far-new-2"]);
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_ties_keep_the_newest_and_are_returned_newest_first() -> Result<()> {
+        let conn = open_memory()?;
+        insert_events(&conn, &[
+            ("t1", "2026-10-20T01:00:00.000Z", "memo about authentication settings"),
+            ("t2", "2026-10-21T01:00:00.000Z", "memo about authentication settings"),
+            ("t3", "2026-10-22T01:00:00.000Z", "memo about authentication settings"),
+        ]);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 2, SearchOrder::Newest, true)?;
+        let keys: Vec<&str> = hits.events.iter().map(|e| e.source_event_id.as_str()).collect();
+        assert_eq!(keys, ["t3", "t2"]); // 同点は新しい 2 件が残り、新しい順
+        // 同時刻なら、後に書かれた(sequence が大きい)ほうが先
+        let conn = open_memory()?;
+        insert_events(&conn, &[
+            ("s1", "2026-10-20T01:00:00.000Z", "memo about authentication settings"),
+            ("s2", "2026-10-20T01:00:00.000Z", "memo about authentication settings"),
+        ]);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 2, SearchOrder::Newest, true)?;
+        let keys: Vec<&str> = hits.events.iter().map(|e| e.source_event_id.as_str()).collect();
+        assert_eq!(keys, ["s2", "s1"]);
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_with_a_zero_limit_returns_nothing_and_does_not_fail() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        let hits = timeline_search(&conn, None, None, None, Some("authnetication"), 0, SearchOrder::Newest, true)?;
+        assert!(hits.events.is_empty());
+        assert!(hits.warning.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn exact_search_results_carry_no_warning() -> Result<()> {
+        let conn = open_memory()?;
+        fuzzy_corpus(&conn);
+        assert!(timeline_search(&conn, None, None, None, Some("authentication"), 30, SearchOrder::Newest, true)?.warning.is_none());
+        assert!(timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?.warning.is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_fuzzy_fallback_on_twenty_thousand_events() -> Result<()> {
+        let path = file_db("bench-fuzzy");
+        let conn = open(&path)?;
+        for session in 0..40 {
+            conn.execute("INSERT INTO sessions(source_tool, project_path, source_file, source_hash) VALUES ('claude-code', '/w', ?1, ?1)", [format!("s{session}")])?;
+        }
+        let words = ["京都", "旅行", "家計簿", "検索", "設計", "実装", "確認", "公開", "リリース", "署名", "公証", "題名", "区切り", "会話", "取り込み", "認証"];
+        let tx = conn.unchecked_transaction()?;
+        for i in 0..20_000 {
+            let mut body = String::new();
+            for k in 0..120 {
+                body.push_str(words[(i * 7 + k * 3) % words.len()]);
+                body.push_str(if k % 9 == 0 { "。\n" } else { "、" });
+            }
+            if i % 100 == 0 {
+                body.push_str(" authentication の設定");
+            }
+            tx.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?5, 'x', ?1, ?2, 'user', ?3, ?4)",
+                params![format!("b{i}"), format!("2026-10-{:02}T{:02}:{:02}:00.000Z", 1 + (i / 1440) % 28, (i / 60) % 24, i % 60), body, i as i64, 1 + (i % 40) as i64],
+            )?;
+        }
+        tx.commit()?;
+        for query in ["authnetication", "認承", "存在しない言葉xyz"] {
+            let t = std::time::Instant::now();
+            let hits = timeline_search(&conn, None, None, None, Some(query), 30, SearchOrder::Newest, true)?;
+            println!("{query:<18} あいまい一致 {:>10.1?} ({} 件, fuzzy={})", t.elapsed(), hits.events.len(), hits.fuzzy);
+        }
+        drop(conn);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
         Ok(())
     }
 
