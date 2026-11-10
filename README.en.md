@@ -80,6 +80,17 @@ You can also install it by hand without the store (for developers):
 
 It has a full-text index, and Japanese works as a substring match. Terms of 3 or more characters use the index; shorter terms scan the text directly. The index makes the database about 40% larger. When nothing matches exactly, it automatically retries with a typo-tolerant fuzzy match.
 
+### Typo-tolerant search (fuzzy match)
+
+Only when there is no exact match, SyncLane searches again allowing typos. When there is at least one exact match, the results and their order are unchanged.
+
+- **What is tolerated:** a missing, extra or changed character. The number allowed depends on the length of the term: 1 character for terms of 2–7 characters, 2 for terms of 8–64. Terms of 1 character, or 65 or more, tolerate no typos: only messages that contain them as they are match. A search with no term that can tolerate typos (for example, a single character) is not retried.
+- **A swap counts as two changes.** A swap such as `sessoin` does not match for terms of 7 characters or fewer. Terms of 8 or more allow two changes, so a swap can match.
+- **Every term, separated by spaces, must match (AND).** It looks in the message text, the title and the project location. The date and project filters apply as usual.
+- **Order:** closest match first; for equally close matches, newest first.
+- **Where it works:** the window search, the MCP search your AI uses (turn it off with `fuzzy: off`), and Markdown export (copying a range). When it retries, the window says so ("No exact matches, showing fuzzy matches (typos allowed).").
+- **Limit:** it cannot use the index, so it looks at the newest 50,000 events at most. If it stops there, or if the second search fails, the window and the MCP say so.
+
 ## Editing conversation titles
 
 Use the ✎ next to a title in the list to rewrite it. Claude Code gives a conversation a title once, at the start, and never updates it when the topic changes.

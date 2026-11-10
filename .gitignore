@@ -18,3 +18,11 @@ src-tauri/target/
 /docs/manifest-*.json
 /docs/conversations.json
 /docs/claude_ai_import/__pycache__/
+
+# 構想・検討メモ(コミットしない。公開リポジトリの中なので、検討の途中のものは、ここで除く)
+/docs/RAG推進プラン.md
+
+# 開発キャッシュ・依存関係
+/.astro/
+/node_modules/
+

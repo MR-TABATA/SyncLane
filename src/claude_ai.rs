@@ -1,4 +1,4 @@
-//! claude.ai の公式エクスポート(Settings → Privacy → Export data)を取り込む。
+//! claude.ai の公式エクスポート(claude.ai の設定からエクスポートしたデータ)を取り込む。
 //!
 //! 渡せるもの: `conversations.json` / それを含む `.zip`(`conversations-000.zip` など) / それらを含むフォルダ。
 //! 取り込みの本体は、Chrome 拡張と同じ `ingest::ingest`(冪等。同じ会話を取り込み直しても重複しない。伸びた会話は、足した分だけ入る)。
