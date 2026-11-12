@@ -26,3 +26,6 @@ src-tauri/target/
 /.astro/
 /node_modules/
 
+
+# Agensi などに登録するスキルの zip（skills/ から作る生成物）
+/dist/
