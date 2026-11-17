@@ -90,6 +90,184 @@ pub fn overview(conn: &Connection) -> Result<Vec<ProjectRow>> {
     Ok(projects)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolSession {
+    pub session_id: i64,
+    pub project_path: String,
+    pub project_name: String,
+    pub title: String,
+    pub last_event_id: i64,
+    pub last_at: String,
+    pub resumable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolGroup {
+    pub source_tool: String,
+    pub display_name: String,
+    pub sessions: Vec<ToolSession>,
+}
+
+fn tool_display_name(tool: &str) -> &'static str {
+    match tool {
+        "claude_code" => "Claude Code",
+        "codex" => "Codex",
+        "gemini_cli" => "Gemini CLI",
+        "copilot_cli" => "Copilot CLI",
+        "claude_web" | "claude_ai" => "Claude (Web)",
+        "chatgpt_web" => "ChatGPT (Web)",
+        "gemini_web" => "Gemini (Web)",
+        _ => "AI",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DaySummary {
+    pub day: String,
+    pub count: i64,
+}
+
+/// タイムライン用: 会話が存在する全日付の一覧(新しい順)。
+/// プロジェクト指定なしの場合は events だけで直接集計して無駄な JOIN を省く。
+pub fn timeline_days(conn: &Connection, project: Option<&str>) -> Result<Vec<DaySummary>> {
+    let mapper = |r: &rusqlite::Row| Ok(DaySummary { day: r.get(0)?, count: r.get(1)? });
+    let rows = if let Some(p) = project {
+        let mut stmt = conn.prepare(
+            "SELECT substr(e.occurred_at, 1, 10) as day, count(*)
+             FROM events e
+             JOIN sessions s ON s.id = e.session_id
+             WHERE s.project_path = ?1
+             GROUP BY day
+             ORDER BY day DESC",
+        )?;
+        stmt.query_map([p], mapper)?.collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT substr(occurred_at, 1, 10) as day, count(*)
+             FROM events
+             GROUP BY day
+             ORDER BY day DESC",
+        )?;
+        stmt.query_map([], mapper)?.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    Ok(rows)
+}
+
+/// AIツールごとにグルーピングした会話一覧(最新順)。サイドバー用。
+/// 各会話の最後の発言(last_event_id, last_at)と最初の質問を一括取得し、N+1クエリを排除。
+pub fn sessions_by_tool(conn: &Connection) -> Result<Vec<ToolGroup>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.project_path, s.source_tool, s.title, e.id AS last_event_id, e.occurred_at AS last_at
+         FROM sessions s
+         JOIN (
+             SELECT id, session_id, occurred_at, sequence,
+                    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY occurred_at DESC, sequence DESC) as rn
+             FROM events
+         ) e ON e.session_id = s.id AND e.rn = 1
+         ORDER BY e.occurred_at DESC",
+    )?;
+
+    struct RawRow {
+        id: i64,
+        project_path: String,
+        source_tool: String,
+        title: Option<String>,
+        last_event_id: i64,
+        last_at: String,
+    }
+
+    let rows: Vec<RawRow> = stmt
+        .query_map([], |r| {
+            Ok(RawRow {
+                id: r.get(0)?,
+                project_path: r.get(1)?,
+                source_tool: r.get(2)?,
+                title: r.get(3)?,
+                last_event_id: r.get(4)?,
+                last_at: r.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let all_projects: Vec<&str> = rows.iter().map(|r| r.project_path.as_str()).collect();
+    let names = display_names(&all_projects);
+
+    let need_title_ids: Vec<i64> = rows
+        .iter()
+        .filter(|r| r.title.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true))
+        .map(|r| r.id)
+        .collect();
+
+    let mut first_questions: HashMap<i64, String> = HashMap::new();
+    if !need_title_ids.is_empty() {
+        let placeholders = need_title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT session_id, content FROM (
+                 SELECT session_id, content,
+                        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY sequence ASC) as rn
+                 FROM events
+                 WHERE role = 'user' AND session_id IN ({placeholders})
+             ) WHERE rn = 1"
+        );
+        let mut q_stmt = conn.prepare(&sql)?;
+        let q_rows = q_stmt.query_map(rusqlite::params_from_iter(need_title_ids), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for q in q_rows {
+            if let Ok((sid, content)) = q {
+                let clean = content
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(FALLBACK_TITLE_CHARS)
+                    .collect();
+                first_questions.insert(sid, clean);
+            }
+        }
+    }
+
+    let mut by_tool: HashMap<String, Vec<ToolSession>> = HashMap::new();
+    for row in rows {
+        let title = match row.title.filter(|t| !t.trim().is_empty()) {
+            Some(t) => t,
+            None => first_questions.get(&row.id).cloned().unwrap_or_default(),
+        };
+        let resumable = crate::resume::supports(&row.source_tool);
+        let project_name = names.get(&row.project_path).cloned().unwrap_or_else(|| row.project_path.clone());
+        by_tool.entry(row.source_tool.clone()).or_default().push(ToolSession {
+            session_id: row.id,
+            project_path: row.project_path,
+            project_name,
+            title,
+            last_event_id: row.last_event_id,
+            last_at: row.last_at,
+            resumable,
+        });
+    }
+
+    let mut groups: Vec<ToolGroup> = by_tool
+        .into_iter()
+        .map(|(tool, mut sessions)| {
+            sessions.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+            ToolGroup {
+                display_name: tool_display_name(&tool).to_string(),
+                source_tool: tool,
+                sessions,
+            }
+        })
+        .collect();
+
+    // 最新の会話があるツールを上に
+    groups.sort_by(|a, b| {
+        let a_last = a.sessions.first().map(|s| s.last_at.as_str()).unwrap_or("");
+        let b_last = b.sessions.first().map(|s| s.last_at.as_str()).unwrap_or("");
+        b_last.cmp(a_last)
+    });
+
+    Ok(groups)
+}
+
 /// プロジェクトの指定(名前または場所)を、プロジェクトに引き当てた結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
@@ -360,5 +538,126 @@ mod tests {
         assert_eq!(names[r"C:\Users\x\proj"], "proj");
         // 場所が分からない会話は、そのまま
         assert_eq!(display_names(&["(unknown)"])["(unknown)"], "(unknown)");
+    }
+
+    #[test]
+    fn sessions_by_tool_groups_and_sorts_correctly() -> Result<()> {
+        let conn = db::open_memory()?;
+        // claude_code の会話 (最終 10:00)
+        let c_sid = conn.query_row(
+            "INSERT INTO sessions (source_tool, project_path, started_at) VALUES ('claude_code', '/work/A', '2026-11-17 09:00:00') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'claude_code', 'ev1', '2026-11-17 10:00:00', 'user', 'Claudeの質問', 1)",
+            params![c_sid],
+        )?;
+
+        // codex の会話 (最終 12:00 -> codex の方が新しいので先頭になる)
+        let cx_sid = conn.query_row(
+            "INSERT INTO sessions (source_tool, project_path, started_at) VALUES ('codex', '/work/B', '2026-11-17 11:00:00') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'ev2', '2026-11-17 12:00:00', 'user', 'Codexの質問', 1)",
+            params![cx_sid],
+        )?;
+
+        let groups = sessions_by_tool(&conn)?;
+        assert_eq!(groups.len(), 2);
+        // 最新会話のある codex が先頭
+        assert_eq!(groups[0].source_tool, "codex");
+        assert_eq!(groups[0].sessions[0].title, "Codexの質問");
+        assert_eq!(groups[1].source_tool, "claude_code");
+        assert_eq!(groups[1].sessions[0].title, "Claudeの質問");
+        Ok(())
+    }
+
+    #[test]
+    fn last_event_id_picks_higher_sequence_when_occurred_at_is_identical() -> Result<()> {
+        let conn = db::open_memory()?;
+        let sid = conn.query_row(
+            "INSERT INTO sessions (source_tool, project_path, started_at) VALUES ('codex', '/work/test', '2026-11-17 10:00:00') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        // 同一時刻で sequence 1 と 2 の発言
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'ev_seq1', '2026-11-17 10:00:00', 'user', '質問1', 1)",
+            params![sid],
+        )?;
+        let ev2_id = conn.query_row(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'ev_seq2', '2026-11-17 10:00:00', 'assistant', '回答2', 2) RETURNING id",
+            params![sid],
+            |r| r.get::<_, i64>(0),
+        )?;
+
+        let groups = sessions_by_tool(&conn)?;
+        assert_eq!(groups[0].sessions[0].last_event_id, ev2_id);
+        Ok(())
+    }
+
+    #[test]
+    fn timeline_days_filters_by_project_and_orders_descending() -> Result<()> {
+        let conn = db::open_memory()?;
+        // プロジェクトA: 11/17 (2件), 11/15 (1件)
+        let s_a = conn.query_row(
+            "INSERT INTO sessions (source_tool, project_path) VALUES ('codex', '/work/ProjA') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'a1', '2026-11-17 10:00:00', 'user', 'msg', 1)",
+            params![s_a],
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'a2', '2026-11-17 11:00:00', 'assistant', 'msg', 2)",
+            params![s_a],
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'a3', '2026-11-15 09:00:00', 'user', 'msg', 3)",
+            params![s_a],
+        )?;
+
+        // プロジェクトB: 11/16 (1件)
+        let s_b = conn.query_row(
+            "INSERT INTO sessions (source_tool, project_path) VALUES ('codex', '/work/ProjB') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        conn.execute(
+            "INSERT INTO events (session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+             VALUES (?1, 'codex', 'b1', '2026-11-16 14:00:00', 'user', 'msg', 1)",
+            params![s_b],
+        )?;
+
+        // プロジェクトA指定: 11/17 (2件) と 11/15 (1件)
+        let days_a = timeline_days(&conn, Some("/work/ProjA"))?;
+        assert_eq!(days_a.len(), 2);
+        assert_eq!(days_a[0].day, "2026-11-17");
+        assert_eq!(days_a[0].count, 2);
+        assert_eq!(days_a[1].day, "2026-11-15");
+        assert_eq!(days_a[1].count, 1);
+
+        // 指定なし(全体): 11/17 (2件), 11/16 (1件), 11/15 (1件) が降順で返る
+        let days_all = timeline_days(&conn, None)?;
+        assert_eq!(days_all.len(), 3);
+        assert_eq!(days_all[0].day, "2026-11-17");
+        assert_eq!(days_all[0].count, 2);
+        assert_eq!(days_all[1].day, "2026-11-16");
+        assert_eq!(days_all[1].count, 1);
+        assert_eq!(days_all[2].day, "2026-11-15");
+        assert_eq!(days_all[2].count, 1);
+
+        Ok(())
     }
 }

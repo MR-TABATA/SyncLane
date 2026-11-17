@@ -25,6 +25,7 @@ src-tauri/target/
 # 開発キャッシュ・依存関係
 /.astro/
 /node_modules/
+/.claude/
 
 
 # Agensi などに登録するスキルの zip（skills/ から作る生成物）

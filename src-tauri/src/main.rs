@@ -77,6 +77,20 @@ fn project_overview(state: tauri::State<'_, AppState>) -> Result<Vec<synclane::p
     synclane::projects::overview(&conn).map_err(|e| format!("{e:#}"))
 }
 
+/// AIツールごとにグルーピングした会話一覧(サイドバー用)。
+#[tauri::command]
+fn sessions_by_tool(state: tauri::State<'_, AppState>) -> Result<Vec<synclane::projects::ToolGroup>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::projects::sessions_by_tool(&conn).map_err(|e| format!("{e:#}"))
+}
+
+/// タイムライン用: 会話が存在する全日付の一覧(新しい順)
+#[tauri::command]
+fn timeline_days(project: Option<String>, state: tauri::State<'_, AppState>) -> Result<Vec<synclane::projects::DaySummary>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    synclane::projects::timeline_days(&conn, project.as_deref()).map_err(|e| format!("{e:#}"))
+}
+
 /// 題名の提案(手元の規則)。指した発言が属する区切り(話題のまとまり)の、最近の発言から出す。外には何も送らない。
 #[tauri::command]
 fn section_title_suggest(event_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -441,7 +455,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            status, timeline, project_overview, usage_summary, mcp_executable, open_search_window, close_search_window,
+            status, timeline, timeline_days, project_overview, sessions_by_tool, usage_summary, mcp_executable, open_search_window, close_search_window,
             section_title_suggest, section_title_set, export_section, export_range, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,

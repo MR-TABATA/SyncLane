@@ -15,14 +15,14 @@
       --series-output: #d95926; --series-output: light-dark(#eb6834, #d95926);
       --series-cache: #199e70; --series-cache: light-dark(#1baf7a, #199e70);
       --content-font: inherit; --content-size: 14px;
-      --surface: color-mix(in srgb, var(--bg), var(--text) 5%);
-      --surface-2: color-mix(in srgb, var(--bg), var(--text) 13%);
-      --surface-3: color-mix(in srgb, var(--bg), var(--text) 21%);
-      --border: color-mix(in srgb, var(--bg), var(--text) 18%);
-      --line: color-mix(in srgb, var(--bg), var(--text) 12%);
+      --surface: color-mix(in srgb, var(--bg), var(--text) 4%);
+      --surface-2: color-mix(in srgb, var(--bg), var(--text) 8%);
+      --surface-3: color-mix(in srgb, var(--bg), var(--text) 14%);
+      --border: color-mix(in srgb, var(--bg), var(--text) 11%);
+      --line: color-mix(in srgb, var(--bg), var(--text) 7%);
       --muted: color-mix(in srgb, var(--text) 68%, var(--bg));
       --faint: color-mix(in srgb, var(--text) 52%, var(--bg));
-      --input-bg: color-mix(in srgb, var(--bg), var(--text) 3%);
+      --input-bg: var(--bg);
       --input-border: var(--border);
       --panel: var(--surface);
       --source: color-mix(in srgb, #4d7cff 62%, var(--text));
@@ -33,25 +33,636 @@
       --shadow: rgb(0 0 0 / .45);
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
     body { margin: 0; color: var(--text); background: var(--bg); }
-    header { position: fixed; inset: 0 0 auto; z-index: 20; height: 58px; border-bottom: 1px solid var(--border); background: var(--surface); box-shadow: 0 6px 18px rgb(0 0 0 / .16); }
-    main { display: flex; align-items: flex-start; margin-top: 58px; }
-    section.page { flex: 1 1 auto; min-width: 0; padding: 14px 38px 60px; background: var(--bg); }
-    /* 左のサイドバー(プロジェクトで絞り込み)。狭い窓では隠す */
-    .sidebar { position: sticky; top: 58px; flex: 0 0 264px; width: 264px; height: calc(100vh - 58px); overflow-y: auto; padding: 8px 0 24px; border-right: 1px solid var(--border); background: var(--surface); font-size: 13px; }
-    .sb-head { padding: 6px 14px 6px; color: var(--faint); font-size: 11px; letter-spacing: .04em; }
-    .sb-empty { padding: 8px 14px; color: var(--faint); }
-    .sidebar button.sb-all, .sidebar button.sb-project { width: 100%; justify-content: space-between; gap: 8px; padding: 6px 14px; border: 0; border-radius: 0; background: transparent; text-align: left; font-weight: 650; }
-    .sidebar button.sb-all { font-weight: 500; color: var(--muted); }
-    .sidebar button.sb-all:hover:not(:disabled), .sidebar button.sb-project:hover:not(:disabled) { background: var(--surface-2); }
-    .sidebar button.sb-all.active, .sidebar button.sb-project.active { background: var(--selected); }
-    .sb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sb-when { flex: none; color: var(--faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
-    .sb-more { margin: 4px 14px; padding: 2px 0; border: 0; background: none; color: var(--source); font-size: 12px; }
-    .sb-more:hover:not(:disabled) { background: none; text-decoration: underline; }
+    header { position: fixed; inset: 0 0 auto; z-index: 20; height: 58px; border-bottom: 1px solid var(--border); background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+    main { display: flex; align-items: stretch; margin-top: 58px; height: calc(100vh - 58px); overflow: hidden; }
+    section.page { flex: 1 1 auto; min-width: 0; height: 100%; overflow-y: auto; padding: 14px 38px 60px; background: var(--bg); }
+    /* Liquid Glass 変数 */
+    :root {
+      --glass-bg: color-mix(in srgb, var(--surface) 65%, transparent);
+      --glass-card: color-mix(in srgb, var(--surface-2) 65%, transparent);
+      --glass-card-hover: color-mix(in srgb, var(--surface-3) 85%, transparent);
+      --glass-border: color-mix(in srgb, var(--text) 12%, transparent);
+      --glass-highlight: color-mix(in srgb, var(--text) 22%, transparent);
+      --glass-shine: color-mix(in srgb, var(--text) 8%, transparent);
+    }
+
+    /* 左のサイドバー: Liquid Glass スタイル */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      flex: 0 0 280px;
+      width: 280px;
+      min-width: 280px;
+      max-width: 280px;
+      height: 100%;
+      overflow: hidden;
+      padding: 14px 10px 20px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border-right: 1px solid var(--glass-border);
+      box-shadow: inset -1px 0 0 0 var(--glass-shine);
+      user-select: none;
+    }
     body.search-window .sidebar { display: none; }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+    /* サイドバー最上部の切り替えタブ */
+    .sb-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 3px;
+      margin-bottom: 12px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 75%, transparent);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(12px);
+      box-shadow: inset 0 1px 1px 0 var(--glass-shine);
+      flex-shrink: 0;
+    }
+    .sb-tab {
+      flex: 1 1 0;
+      padding: 6px 0;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      text-align: center;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+    .sb-tab:hover {
+      color: var(--text);
+    }
+    .sb-tab.active {
+      background: var(--surface-2);
+      color: var(--text);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), inset 0 1px 1px var(--glass-shine);
+    }
+
+    /* 各パネル */
+    .sb-panel {
+      display: none;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    .sb-panel.active {
+      display: flex;
+    }
+
+    .sb-empty { padding: 12px 10px; color: var(--faint); font-size: 12px; }
+
+    .sb-all-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      border: 1px solid var(--glass-border);
+      border-radius: 9px;
+      background: var(--glass-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.02), inset 0 1px 1px 0 var(--glass-shine);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+    .sb-all-btn:hover {
+      background: var(--glass-card-hover);
+      border-color: var(--glass-highlight);
+      transform: translateY(-1px);
+    }
+    .sb-all-btn.active {
+      background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 20%, transparent), inset 0 1px 1px var(--glass-shine);
+      font-weight: 650;
+      color: var(--text);
+    }
+
+    .sb-group {
+      margin-bottom: 16px;
+    }
+    .sb-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 6px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      color: var(--muted);
+    }
+    .sb-group-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .sb-group-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .sb-group-dot.claude_code { background: #818cf8; }
+    .sb-group-dot.codex { background: #10b981; }
+    .sb-group-dot.gemini_cli { background: #38bdf8; }
+    .sb-group-count {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--faint);
+      padding: 1px 5px;
+      border-radius: 10px;
+      background: var(--glass-border);
+    }
+
+    /* セッションカード (Liquid Glass) */
+    .sb-card {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      width: 100%;
+      padding: 9px 11px;
+      margin-bottom: 6px;
+      border-radius: 11px;
+      border: 1px solid var(--glass-border);
+      background: var(--glass-card);
+      box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.02), inset 0 1px 1px 0 var(--glass-shine);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      cursor: pointer;
+      text-align: left;
+      position: relative;
+      transition: all .18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .sb-card:hover {
+      background: var(--glass-card-hover);
+      border-color: var(--glass-highlight);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.05), inset 0 1px 1px 0 var(--glass-shine);
+    }
+    .sb-card.active {
+      background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 1px 1px var(--glass-shine);
+    }
+    .sb-card-title {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
+    }
+    .sb-card-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 11px;
+    }
+    .sb-card-project {
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--glass-border);
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .sb-card-when {
+      margin-left: auto;
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .sb-card-actions {
+      display: none;
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      gap: 3px;
+    }
+    .sb-card:hover .sb-card-actions {
+      display: flex;
+    }
+    .sb-act-btn {
+      padding: 2px 6px;
+      border: 1px solid var(--glass-border);
+      border-radius: 4px;
+      background: var(--glass-card-hover);
+      color: var(--muted);
+      font-size: 10px;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+    .sb-act-btn:hover {
+      background: var(--surface-3);
+      color: var(--text);
+      border-color: var(--glass-highlight);
+    }
+
+    /* マイルストーン・タイムライン (左サイドバー内) */
+    .sb-milestone-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 6px 10px;
+      border-bottom: 1px solid var(--glass-border);
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    .sb-milestone-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+    .scrubber-mode-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: var(--glass-card);
+      border: 1px solid var(--glass-border);
+      color: var(--muted);
+    }
+
+    .scrubber-inner {
+      position: relative;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 240px;
+    }
+
+    /* 縦棒レール */
+    .scrubber-track {
+      position: absolute;
+      top: 16px;
+      bottom: 16px;
+      left: 19px;
+      width: 2px;
+      border-radius: 1px;
+      background: color-mix(in srgb, var(--text) 14%, transparent);
+      cursor: pointer;
+      transition: background .15s ease;
+    }
+    .scrubber-track:hover {
+      background: color-mix(in srgb, var(--text) 24%, transparent);
+    }
+
+    /* マイルストーン行 */
+    .scrubber-milestone {
+      position: absolute;
+      left: 0;
+      right: 0;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      padding: 6px 8px;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: all .16s ease;
+      z-index: 2;
+    }
+    .scrubber-milestone:hover {
+      background: var(--glass-card-hover);
+    }
+    .scrubber-milestone.active {
+      background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+
+    /* マイルストーンのポイント (丸ノード) */
+    .scrubber-point {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-left: 15px;
+      margin-right: 12px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border: 2px solid color-mix(in srgb, var(--text) 35%, transparent);
+      box-shadow: 0 0 0 2px var(--surface);
+      transition: all .18s ease;
+    }
+    .scrubber-milestone:hover .scrubber-point {
+      border-color: var(--accent);
+      transform: scale(1.3);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .scrubber-milestone.active .scrubber-point {
+      border-color: var(--accent);
+      background: var(--accent);
+      transform: scale(1.4);
+      box-shadow: 0 0 10px var(--accent);
+    }
+
+    /* マイルストーンのテキストボックス */
+    .scrubber-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .scrubber-main-text {
+      font-size: 11px;
+      font-weight: 650;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .scrubber-sub-text {
+      font-size: 10px;
+      color: var(--faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .scrubber-milestone.active .scrubber-main-text {
+      color: var(--accent);
+    }
+
+    /* スライダーつまみ (Handle) */
+    .scrubber-handle {
+      position: absolute;
+      left: 20px;
+      top: 16px;
+      transform: translate(-50%, -50%);
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--glass-card-hover);
+      border: 1.5px solid var(--accent);
+      box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 1px var(--glass-shine);
+      cursor: grab;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform .08s ease, box-shadow .15s ease;
+    }
+    .scrubber-handle:active, .scrubber-handle.dragging {
+      cursor: grabbing;
+      transform: translate(-50%, -50%) scale(1.2);
+      box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 1px 2px var(--glass-shine);
+    }
+    .scrubber-handle-inner {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* 吹き出しツールチップ (Bubble) */
+    .scrubber-bubble {
+      position: absolute;
+      left: 32px;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 4px 9px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--glass-border);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15), inset 0 1px 1px var(--glass-shine);
+      font-size: 11px;
+      font-weight: 650;
+      color: var(--text);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .15s ease, transform .15s ease;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      z-index: 10;
+    }
+    .scrubber-bubble.visible {
+      opacity: 1;
+      transform: translateY(-50%) translateX(4px);
+    }
+    /* メイン画面の日付ディバイダー (マイルストーン区切り) */
+    .timeline-date-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      margin: 32px 0 16px;
+    }
+    .timeline-date-divider:first-child {
+      margin-top: 8px;
+    }
+    .timeline-date-line {
+      flex: 1 1 auto;
+      height: 1px;
+      background: color-mix(in srgb, var(--border) 60%, transparent);
+    }
+    .timeline-date-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .02em;
+      color: var(--text);
+    }
+    .timeline-date-chip svg {
+      color: var(--accent);
+    }
+
+    /* カードのメタ情報の整列 */
+    .event-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .event-time {
+      font-size: 11.5px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--text) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    }
+    .event-meta .source {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--faint);
+    }
+
+    /* サイドバー: タイムライン (極限までシンプル: | ● 日付（曜日）) */
+    .sb-timeline-container {
+      position: relative;
+      width: 100%;
+      padding: 24px 0 64px;
+    }
+    /* 縦棒レール (| 中心軸: 24px) */
+    .sb-timeline-track {
+      position: absolute;
+      top: 30px;
+      bottom: 70px;
+      left: 23px;
+      width: 2px;
+      border-radius: 1px;
+      background: color-mix(in srgb, var(--text) 22%, transparent);
+      z-index: 1;
+      cursor: pointer;
+    }
+    .sb-timeline-track:hover {
+      background: color-mix(in srgb, var(--text) 36%, transparent);
+    }
+
+    /* レール上を上下にスライドするつまみ (Handle 中心軸: 24px) */
+    .sb-timeline-handle {
+      position: absolute;
+      left: 24px;
+      top: 30px;
+      transform: translate(-50%, -50%);
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+      cursor: grab;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: top .15s cubic-bezier(0.16, 1, 0.3, 1), transform .08s ease;
+    }
+    .sb-timeline-handle:active, .sb-timeline-handle.dragging {
+      cursor: grabbing;
+      transform: translate(-50%, -50%) scale(1.2);
+    }
+    .sb-timeline-handle-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* マイルストーンリスト (通常フロー: 日にちの間隔をゆったりと確保) */
+    .sb-timeline-list {
+      display: flex;
+      flex-direction: column;
+      gap: 50px;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* マイルストーン行 (罫囲みなし) */
+    .sb-timeline-milestone {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 0;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      user-select: none;
+    }
+
+    /* レール上の ● ポイント (中心軸: 24px に完全一致) */
+    .sb-timeline-point {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1.5px solid color-mix(in srgb, var(--text) 40%, transparent);
+      box-shadow: 0 0 0 2px var(--surface);
+      margin-left: 20px;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      transition: all .16s ease;
+    }
+    .sb-timeline-milestone:hover .sb-timeline-point {
+      border-color: var(--accent);
+      transform: scale(1.25);
+    }
+    .sb-timeline-milestone.active .sb-timeline-point {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.3);
+    }
+
+    /* 日付と曜日のみのシンプルなテキスト (太字完全排除: 400 レギュラー) */
+    .sb-timeline-label {
+      font-size: 13px;
+      font-weight: 400 !important;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      letter-spacing: .02em;
+      white-space: nowrap;
+      transition: color .15s ease;
+      line-height: 1;
+    }
+    .sb-timeline-milestone:hover .sb-timeline-label {
+      color: var(--text);
+    }
+    .sb-timeline-milestone.active .sb-timeline-label {
+      color: var(--accent);
+      font-weight: 500 !important;
+    }
+    .sb-timeline-back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      font-size: 11.5px;
+      font-weight: 400 !important;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 8px 12px 10px;
+    }
+    .sb-timeline-back-btn:hover {
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
     .toolbar { position: absolute; top: 0; right: 0; left: 0; z-index: 30; height: 58px; padding: 9px 16px; background: var(--surface); }
-    .header-icons { display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 100%; }
+    .header-icons { display: flex; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; }
+    .header-icons button { background: transparent; border: 1px solid transparent; color: var(--muted); padding: 6px 8px; }
+    .header-icons button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border); color: var(--text); }
     .counts { margin-right: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* ボタンの形・大きさ・並びは MrkDown と同じ(余白 6px 12px、角丸 6px、間隔 8px、アイコン 14〜15px) */
     button { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-2); font: inherit; font-size: 13px; cursor: pointer; }
@@ -83,22 +694,66 @@
     input[type=radio], input[type=range] { height: auto; padding: 0; }
     .search-nav { display: flex; gap: 8px; }
     /* 一覧の上の絞り込み。まずは年月日 */
-    .filter-bar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 6px 12px 14px; }
+    .filter-bar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 0 0 16px; }
     .filter-bar .field { min-width: 0; }
     .filter-bar input { width: 150px; }
-    .timeline-pairs { display: flex; flex-direction: column; }
-    .timeline-pair-head, .timeline-pair-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-    .timeline-pair-head { position: sticky; top: 58px; z-index: 2; color: var(--muted); background: var(--bg); font-size: 11px; font-weight: 600; letter-spacing: .14em; }
-    .timeline-pair-head > div { padding: 8px 12px; }
-    .timeline-pair-head > div + div, .timeline-pair-row > .event + .event { border-left: 1px solid var(--line); }
-    .timeline-pair-row:nth-child(even) { background: var(--row-alt); }
-    .timeline-pair-row > .event { min-width: 0; }
-    .event { scroll-margin-top: 155px; padding: 17px 12px; border-top: 1px solid var(--line); }
-    .event.selected { background: var(--selected); }
-    .event-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
-    .source { color: var(--source); border: 1px solid var(--source-border); border-radius: 999px; padding: 2px 7px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
-    .role { color: var(--role); letter-spacing: .08em; }
-    .event-content { margin: 8px 0 0; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); overflow-wrap: anywhere; }
+    .timeline-stream { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 1100px; margin: 0 auto; padding-bottom: 40px; }
+    .timeline-pair-head { display: none; }
+    .event {
+      padding: 16px 20px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: 0 1px 3px rgb(0 0 0 / .03);
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      scroll-margin-top: 20px;
+    }
+    .event:hover {
+      border-color: color-mix(in srgb, var(--border) 50%, var(--text));
+      box-shadow: 0 2px 8px rgb(0 0 0 / .05);
+    }
+    .event.selected {
+      border-color: var(--accent);
+      background: var(--selected);
+    }
+    /* あなた (User) カード: 右端に明確に寄せる（コンパクト〜最大70%） */
+    .event.event-user {
+      width: fit-content;
+      max-width: 70%;
+      min-width: min(100%, 360px);
+      align-self: flex-end;
+      margin: 0;
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--surface) 95%, var(--accent) 5%);
+    }
+    .event.event-user .role {
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 10.5px;
+    }
+    /* AI (Assistant) カード: 左端に寄せる（幅85%） */
+    .event.event-assistant {
+      width: 85%;
+      align-self: flex-start;
+      margin: 0;
+      border-left: 4px solid #8e44ad;
+      border-left: 4px solid color-mix(in srgb, #9b59b6 75%, var(--text));
+      background: var(--surface);
+    }
+    .event.event-assistant .role {
+      color: color-mix(in srgb, #8e44ad 85%, var(--text));
+      background: color-mix(in srgb, #8e44ad 12%, transparent);
+      border: 1px solid color-mix(in srgb, #8e44ad 25%, transparent);
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 10.5px;
+    }
+    .event-content { margin: 10px 0 0; line-height: 1.6; font-family: var(--content-font); font-size: var(--content-size); overflow-wrap: anywhere; }
     .event-content > :first-child { margin-top: 0; }
     .event-content > :last-child { margin-bottom: 0; }
     .event-content p { margin: 0 0 .6em; white-space: pre-wrap; }
@@ -107,9 +762,9 @@
     .event-content ul, .event-content ol { margin: 0 0 .6em; padding-left: 1.6em; }
     .event-content blockquote { margin: 0 0 .6em; padding: 0 0 0 12px; border-left: 3px solid var(--line); color: var(--muted); }
     .event-content hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
-    .event-content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; padding: .1em .35em; border-radius: 4px; background: var(--surface-3); }
-    .event-content pre { margin: 0 0 .6em; padding: 10px 12px; border-radius: 6px; background: var(--surface-3); overflow-x: auto; }
-    .event-content pre code { padding: 0; background: none; white-space: pre; }
+    .event-content code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; padding: .15em .4em; border-radius: 4px; background: color-mix(in srgb, var(--bg) 95%, var(--text) 5%); border: 1px solid var(--line); }
+    .event-content pre { margin: 0 0 .8em; padding: 12px 14px; border-radius: 6px; background: color-mix(in srgb, var(--bg) 96%, var(--text) 4%); border: 1px solid var(--line); overflow-x: auto; }
+    .event-content pre code { padding: 0; background: none; border: none; white-space: pre; }
     .event-content table { border-collapse: collapse; margin: 0 0 .6em; display: block; overflow-x: auto; }
     .event-content th, .event-content td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; overflow-wrap: normal; }
     .event-content th { background: var(--surface-3); }
@@ -259,10 +914,29 @@
     </div>
   </div></header>
   <main>
-    <aside id="sidebar" class="sidebar" aria-label="プロジェクト">
-      <div class="sb-head" data-i18n="sbHead">プロジェクト</div>
-      <button id="sb-all" class="sb-all active" type="button" data-i18n="sbAll">すべてのプロジェクト</button>
-      <div id="sidebar-list"></div>
+    <aside id="sidebar" class="sidebar" aria-label="ナビゲーション">
+      <div class="sb-tabs">
+        <button id="sb-tab-tools" class="sb-tab" type="button">AI別 (再開)</button>
+        <button id="sb-tab-timeline" class="sb-tab active" type="button">タイムライン</button>
+      </div>
+      <!-- パネル1: AIツール別 (再開) -->
+      <div id="sb-panel-tools" class="sb-panel">
+        <button id="sb-all" class="sb-all-btn active" type="button">すべての会話</button>
+        <div id="sidebar-list"></div>
+      </div>
+      <!-- パネル2: タイムライン (極限までシンプル: | ● 日付（曜日）) -->
+      <div id="sb-panel-timeline" class="sb-panel active">
+        <div id="timeline-subnav" hidden>
+          <button id="timeline-back-btn" class="sb-timeline-back-btn" type="button">← 全ての日付を表示</button>
+        </div>
+        <div id="timeline-container" class="sb-timeline-container">
+          <div id="timeline-track" class="sb-timeline-track"></div>
+          <div id="timeline-handle" class="sb-timeline-handle">
+            <div class="sb-timeline-handle-dot"></div>
+          </div>
+          <div id="timeline-milestones" class="sb-timeline-list"></div>
+        </div>
+      </div>
     </aside>
     <section class="page">
       <div class="filter-bar">
@@ -542,7 +1216,7 @@
       setVar('--content-size', settings.size === SIZE.def ? '' : `${settings.size}px`);
       // 背景が明るければ、フォームやスクロールバーも明るい配色にする
       const bg = settings.bg || '#252832';
-      document.documentElement.style.colorScheme = readableOn(bg) === '#ffffff' ? 'light' : 'dark';
+      document.documentElement.style.colorScheme = readableOn(bg) === '#ffffff' ? 'dark' : 'light';
     }
     function applyLang() {
       document.documentElement.lang = resolvedLang();
@@ -744,7 +1418,7 @@
     }
     async function load() {
       if (!invoke) { $('timeline').innerHTML = `<div class="empty">${t('needApp')}</div>`; return; }
-      if (!isSearchWindow) { showCounts().catch(() => {}); loadSidebar().catch(() => {}); }
+      if (!isSearchWindow) { showCounts().catch(() => {}); loadSidebar().catch(() => {}); fetchAllDays().catch(() => {}); }
       const bySearch = isSearchWindow || searchActive;
       const dates = bySearch ? searchDates() : mainDates();
       const query = bySearch ? ($('query').value || null) : null;
@@ -763,34 +1437,56 @@
       renderEvents();
       updateSearchNav();
     }
+    function formatDividerDate(d) {
+      const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+      return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 (${weekdays[d.getDay()]})`;
+    }
+    function formatOnlyTime(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
     function renderEvents() {
       const warningHtml = fuzzyWarning ? `<div class="fuzzy-note">${escapeHtml(fuzzyWarning)}</div>` : '';
-      if (!searchResults.length) { $('timeline').innerHTML = `<div class="empty">${t('none')}</div>${warningHtml}`; return; }
-      const rows = [];
-      for (let i = 0; i < searchResults.length;) {
-        const current = searchResults[i];
-        const next = searchResults[i + 1];
-        // 関連度順では、隣り合う発言は、続きの会話とは限らない。組にせず、1 件ずつ並べる
-        // あいまい一致も点数順なので、組にしない
-        if (resultOrder !== 'relevance' && !fuzzyActive && current.role.toUpperCase() === 'ASSISTANT' && next?.role.toUpperCase() === 'USER') {
-          rows.push({ user: { e: next, index: i + 1 }, assistant: { e: current, index: i } });
-          i += 2;
-        } else if (current.role.toUpperCase() === 'USER') {
-          rows.push({ user: { e: current, index: i }, assistant: null });
-          i += 1;
-        } else {
-          rows.push({ user: null, assistant: { e: current, index: i } });
-          i += 1;
-        }
+      if (!searchResults.length) {
+        $('timeline').innerHTML = `<div class="empty">${t('none')}</div>${warningHtml}`;
+        updateTimelineTree([]);
+        return;
       }
-      $('timeline').innerHTML = `<div class="timeline-pairs">${fuzzyActive ? `<div class="fuzzy-note">${t('fuzzyNote')}</div>` : ''}${warningHtml}<div class="timeline-pair-head"><div>${roleLabel('USER')}</div><div>${roleLabel('ASSISTANT')}</div></div>${rows.map(row => `<div class="timeline-pair-row">${row.user ? eventMarkup(row.user.e, row.user.index) : '<div></div>'}${row.assistant ? eventMarkup(row.assistant.e, row.assistant.index) : '<div></div>'}</div>`).join('')}</div>`;
+      let lastDateKey = '';
+      const streamHtml = [];
+      searchResults.forEach((e, index) => {
+        const d = new Date(e.occurred_at);
+        const dateKey = !Number.isNaN(d.getTime()) ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : '';
+        if (dateKey && dateKey !== lastDateKey) {
+          lastDateKey = dateKey;
+          streamHtml.push(`
+            <div class="timeline-date-divider" data-date-divider="${dateKey}">
+              <div class="timeline-date-line"></div>
+              <div class="timeline-date-chip">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span>${formatDividerDate(d)}</span>
+              </div>
+              <div class="timeline-date-line"></div>
+            </div>
+          `);
+        }
+        streamHtml.push(eventMarkup(e, index));
+      });
+
+      $('timeline').innerHTML = `<div class="timeline-stream">${fuzzyActive ? `<div class="fuzzy-note">${t('fuzzyNote')}</div>` : ''}${warningHtml}${streamHtml.join('')}</div>`;
       if (selectedResult >= 0) document.querySelector(`[data-event-index="${selectedResult}"]`)?.scrollIntoView({ block: 'nearest' });
+      updateTimelineView(searchResults);
     }
     function eventMarkup(e, index) {
+      const isUser = e.role.toUpperCase() === 'USER';
+      const roleClass = isUser ? 'event-user' : 'event-assistant';
       const long = e.content.length > PREVIEW_CHARS;
       const open = long && expanded.has(index);
       const more = long ? `<button class="more" type="button" data-more="${index}">${t(open ? 'collapse' : 'expand')}</button>` : '';
-      return `<article class="event${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span>${formatTime(e.occurred_at)}</span><span class="source">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><span class="event-actions"><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>${(e.source_tool === 'claude_code' || e.source_tool === 'codex' || e.source_tool === 'gemini_cli') ? `<button class="title-edit export-btn" type="button" data-resume-open-event="${e.event_id}" title="${t('resumeOpenBtn')}" aria-label="${t('resumeOpenBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="7 4 19 12 7 20 7 4"/></svg></button><button class="title-edit export-btn" type="button" data-resume-event="${e.event_id}" title="${t('resumeBtn')}" aria-label="${t('resumeBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ''}</span></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
+      const timeStr = formatOnlyTime(e.occurred_at);
+      return `<article class="event ${roleClass}${index === selectedResult ? ' selected' : ''}" data-event-index="${index}"><div class="event-meta"><span class="event-time">${timeStr}</span><span class="source ${e.source_tool}">${sourceLabel(e.source_tool)}</span><span class="role">${roleLabel(e.role)}</span><span class="title" title="${escapeHtml(e.project_path)}">${escapeHtml(e.title || e.project_path)}</span><span class="event-actions"><button class="title-edit" type="button" data-title-event="${e.event_id}" title="${t('titleEdit')}" aria-label="${t('titleEdit')}">✎</button><button class="title-edit export-btn" type="button" data-export-event="${e.event_id}" title="${t('exportBtn')}" aria-label="${t('exportBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>${(e.source_tool === 'claude_code' || e.source_tool === 'codex' || e.source_tool === 'gemini_cli') ? `<button class="title-edit export-btn" type="button" data-resume-open-event="${e.event_id}" title="${t('resumeOpenBtn')}" aria-label="${t('resumeOpenBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="7 4 19 12 7 20 7 4"/></svg></button><button class="title-edit export-btn" type="button" data-resume-event="${e.event_id}" title="${t('resumeBtn')}" aria-label="${t('resumeBtn')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>` : ''}</span></div><div class="event-content">${renderMarkdown(open ? e.content : short(e.content))}</div>${more}</article>`;
     }
     // ---- 題名の編集 ----
     let editingEvent = null;
@@ -1023,17 +1719,25 @@
     $('usage-period').addEventListener('change', refreshUsage);
     document.querySelectorAll('[data-usage-group]').forEach((tab) => tab.addEventListener('click', () => { usageGroup = tab.dataset.usageGroup; refreshUsage(); }));
 
-    // ---- サイドバー(プロジェクトで絞り込み)----
-    const SIDEBAR_PROJECTS = 15; // 最初に出すプロジェクトの数。残りは「あと N 件を表示」
-    let sidebarProjects = [];
-    let sidebarShowAll = false;
+    // ---- サイドバー(AIツール別にグルーピングした再開可能な会話一覧 - Liquid Glass) ----
+    let toolGroups = [];
+    let activeSessionId = null;
+
     async function loadSidebar() {
       if (!invoke || isSearchWindow) return;
-      sidebarProjects = await invoke('project_overview');
-      // 選んでいたプロジェクトが、もう無いときは、絞り込みを外す(一覧は、次の読み込みで戻る)
-      if (activeProject && !sidebarProjects.some((p) => p.project_path === activeProject)) activeProject = null;
-      renderSidebar();
+      try {
+        toolGroups = await invoke('sessions_by_tool');
+        // 選んでいたセッションやプロジェクトの整合性チェック
+        if (activeSessionId) {
+          const exists = toolGroups.some((g) => g.sessions.some((s) => s.session_id === activeSessionId));
+          if (!exists) activeSessionId = null;
+        }
+        renderSidebar();
+      } catch (err) {
+        console.error('loadSidebar failed', err);
+      }
     }
+
     function sidebarWhen(iso) {
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return '';
@@ -1041,31 +1745,101 @@
       if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(resolvedLang() === 'ja' ? 'ja-JP' : 'en-US', { hour: '2-digit', minute: '2-digit' });
       return d.toLocaleDateString(resolvedLang() === 'ja' ? 'ja-JP' : 'en-US', { month: 'numeric', day: 'numeric' });
     }
+
     function renderSidebar() {
-      $('sb-all').classList.toggle('active', activeProject === null);
-      if (!sidebarProjects.length) { $('sidebar-list').innerHTML = `<div class="sb-empty">${t('sbEmpty')}</div>`; return; }
-      const shown = sidebarShowAll ? sidebarProjects : sidebarProjects.slice(0, SIDEBAR_PROJECTS);
-      // 選んでいるプロジェクトが「あと N 件」の中なら、隠さない
-      const picked = activeProject && !shown.some((p) => p.project_path === activeProject) ? sidebarProjects.filter((p) => p.project_path === activeProject) : [];
-      const rows = shown.concat(picked).map((p) => {
-        return `<button class="sb-project${p.project_path === activeProject ? ' active' : ''}" type="button" data-project="${escapeHtml(p.project_path)}" title="${escapeHtml(p.project_path)} — ${t('sbFilter')}"><span class="sb-name">${escapeHtml(p.name)}</span><span class="sb-when">${sidebarWhen(p.last_at)}</span></button>`;
+      $('sb-all').classList.toggle('active', activeProject === null && activeSessionId === null);
+      if (!toolGroups || !toolGroups.length) {
+        $('sidebar-list').innerHTML = `<div class="sb-empty">再開可能な会話がありません</div>`;
+        return;
+      }
+      const html = toolGroups.map((g) => {
+        const count = g.sessions.length;
+        const sessionsHtml = g.sessions.map((s) => {
+          const isActive = activeSessionId === s.session_id || (activeProject === s.project_path && !activeSessionId);
+          const resumeBtn = s.resumable
+            ? `<div class="sb-card-actions">
+                 <button class="sb-act-btn" type="button" data-action="terminal" data-event-id="${s.last_event_id}" title="ターミナルで再開">起動</button>
+                 <button class="sb-act-btn" type="button" data-action="copy" data-event-id="${s.last_event_id}" title="コマンドをコピー">コピー</button>
+               </div>`
+            : '';
+          return `
+            <div class="sb-card${isActive ? ' active' : ''}" data-session-id="${s.session_id}" data-project="${escapeHtml(s.project_path)}" data-event-id="${s.last_event_id}">
+              <div class="sb-card-title">${escapeHtml(s.title || '（無題の会話）')}</div>
+              <div class="sb-card-meta">
+                <span class="sb-card-project" title="${escapeHtml(s.project_path)}">${escapeHtml(s.project_name)}</span>
+                <span class="sb-card-when">${sidebarWhen(s.last_at)}</span>
+              </div>
+              ${resumeBtn}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="sb-group">
+            <div class="sb-group-head">
+              <span class="sb-group-badge">
+                <span class="sb-group-dot ${escapeHtml(g.source_tool)}"></span>
+                <span>${escapeHtml(g.display_name)}</span>
+              </span>
+              <span class="sb-group-count">${count}件</span>
+            </div>
+            ${sessionsHtml}
+          </div>
+        `;
       }).join('');
-      const rest = sidebarProjects.length - shown.length;
-      const more = !sidebarShowAll && rest > 0 ? `<button class="sb-more" type="button" id="sb-more">${t('sbMore', rest)}</button>` : '';
+
       const top = $('sidebar').scrollTop;
-      $('sidebar-list').innerHTML = rows + more;
+      $('sidebar-list').innerHTML = html;
       $('sidebar').scrollTop = top;
     }
-    function chooseProject(project) {
-      activeProject = project === activeProject ? null : project;
+
+    async function selectSession(sessionEl) {
+      const sessionId = Number(sessionEl.dataset.sessionId);
+      const project = sessionEl.dataset.project;
+      activeSessionId = sessionId;
+      activeProject = project;
       renderSidebar();
       load().catch(() => {});
     }
-    $('sb-all').addEventListener('click', () => { if (activeProject !== null) chooseProject(activeProject); });
-    $('sidebar').addEventListener('click', (event) => {
-      if (event.target.closest?.('#sb-more')) { sidebarShowAll = true; renderSidebar(); return; }
-      const project = event.target.closest?.('[data-project]');
-      if (project) chooseProject(project.dataset.project);
+
+    $('sb-all').addEventListener('click', () => {
+      activeProject = null;
+      activeSessionId = null;
+      renderSidebar();
+      load().catch(() => {});
+    });
+
+    $('sidebar').addEventListener('click', async (event) => {
+      const act = event.target.closest?.('.sb-act-btn');
+      if (act) {
+        event.stopPropagation();
+        const eventId = Number(act.dataset.eventId);
+        if (act.dataset.action === 'terminal') {
+          try {
+            await invoke('resume_open', { eventId });
+          } catch (e) {
+            alert(e);
+          }
+        } else if (act.dataset.action === 'copy') {
+          try {
+            const cmd = await invoke('resume_command', { eventId });
+            if (cmd) {
+              await navigator.clipboard.writeText(cmd);
+              const old = act.textContent;
+              act.textContent = '済';
+              setTimeout(() => { act.textContent = old; }, 1200);
+            }
+          } catch (e) {
+            alert(e);
+          }
+        }
+        return;
+      }
+
+      const card = event.target.closest?.('.sb-card');
+      if (card) {
+        selectSession(card);
+      }
     });
 
     // 長い本文の「全文を表示 / 折りたたむ」(一覧を組み直さず、その1件だけ差し替える)
@@ -1273,9 +2047,356 @@
         console.error('更新の確認に失敗しました', error);
       }
     }
+    // ---- サイドバー最上部のタブ切り替え (AI別 vs タイムライン) ----
+    let sidebarMode = 'timeline'; // 'tools' | 'timeline'
+    function setSidebarMode(mode) {
+      sidebarMode = mode;
+      $('sb-tab-tools').classList.toggle('active', mode === 'tools');
+      $('sb-tab-timeline').classList.toggle('active', mode === 'timeline');
+      $('sb-panel-tools').classList.toggle('active', mode === 'tools');
+      $('sb-panel-timeline').classList.toggle('active', mode === 'timeline');
+      if (mode === 'timeline') {
+        requestAnimationFrame(() => updateTimelineView(searchResults));
+      }
+    }
+    $('sb-tab-tools').addEventListener('click', () => setSidebarMode('tools'));
+    $('sb-tab-timeline').addEventListener('click', () => setSidebarMode('timeline'));
+
+    // ---- サイドバー: タイムライン (| ● 日付（曜日）) ----
+    let timelineMilestones = [];
+    let isTimelineDragging = false;
+    let activeMilestoneIdx = 0;
+    let cachedTimelineDays = [];
+    let timelineDisplayMode = 'days'; // 'days' | 'times'
+
+    function formatDayLabelText(dayStr) {
+      const parts = dayStr.split('-');
+      if (parts.length < 3) return dayStr;
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      const date = new Date(y, m - 1, d);
+      const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+      return `${m}月${d}日（${weekdays[date.getDay()]}）`;
+    }
+
+    async function fetchAllDays() {
+      if (!invoke) return [];
+      try {
+        const days = await invoke('timeline_days', { project: null });
+        if (Array.isArray(days) && days.length > 0) {
+          cachedTimelineDays = days;
+        }
+      } catch (err) {
+        console.error('timeline_days 取得失敗', err);
+      }
+      return cachedTimelineDays;
+    }
+
+    async function updateTimelineView(events) {
+      const container = $('timeline-milestones');
+      const handleEl = $('timeline-handle');
+      const subnavEl = $('timeline-subnav');
+      if (!container || !handleEl) return;
+
+      const fromVal = $('filter-from').value;
+      const toVal = $('filter-to').value;
+      const bySearch = isSearchWindow || searchActive;
+      const queryVal = bySearch ? $('query').value : '';
+      const isFiltered = !!(fromVal || toVal || queryVal || activeProject);
+
+      if (subnavEl) {
+        subnavEl.hidden = !isFiltered;
+      }
+
+      let items = [];
+
+      if (!isFiltered) {
+        // 【検索条件なし: 全体表示】DB内の全日程を表示
+        timelineDisplayMode = 'days';
+        if (!cachedTimelineDays.length) {
+          await fetchAllDays();
+        }
+        if (cachedTimelineDays.length) {
+          items = cachedTimelineDays.map((d) => ({
+            type: 'day',
+            dayStr: d.day,
+            count: d.count,
+            labelText: formatDayLabelText(d.day),
+          }));
+        }
+      } else if (events && events.length) {
+        // 【検索結果あり: 検索結果と完全連動】
+        // 検索結果に含まれるユニーク日付を抽出
+        const dateMap = new Map();
+        events.forEach((e) => {
+          const d = new Date(e.occurred_at);
+          if (Number.isNaN(d.getTime())) return;
+          const dayKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+          dateMap.set(dayKey, (dateMap.get(dayKey) || 0) + 1);
+        });
+
+        if (dateMap.size === 1) {
+          // 検索結果が1日だけの場合: 【時刻表示モード】日内をスライド
+          timelineDisplayMode = 'times';
+          let lastMinuteKey = '';
+          events.forEach((e, idx) => {
+            const d = new Date(e.occurred_at);
+            if (Number.isNaN(d.getTime())) return;
+            const minKey = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            if (minKey !== lastMinuteKey || idx === 0 || idx === events.length - 1) {
+              lastMinuteKey = minKey;
+              const isUser = e.role.toUpperCase() === 'USER';
+              const roleName = isUser ? 'あなた' : 'AI';
+              items.push({
+                type: 'time',
+                targetIndex: idx,
+                labelText: `${minKey} (${roleName})`,
+              });
+            }
+          });
+        } else {
+          // 検索結果が複数日の場合: 【検索結果に含まれる日付のみ表示】
+          timelineDisplayMode = 'days';
+          dateMap.forEach((count, dayKey) => {
+            items.push({
+              type: 'day',
+              dayStr: dayKey,
+              count: count,
+              labelText: formatDayLabelText(dayKey),
+            });
+          });
+        }
+      }
+
+      if (!items.length) {
+        container.innerHTML = '<div class="sb-empty">検索条件に一致する日付がありません</div>';
+        handleEl.style.display = 'none';
+        timelineMilestones = [];
+        return;
+      }
+      handleEl.style.display = 'flex';
+      timelineMilestones = items;
+
+      // 日数が少ない（2日間など）時は、サイドバーの縦幅を活かして間隔を大きく広げる
+      const sbEl = $('sidebar');
+      const availH = Math.max(280, (sbEl ? sbEl.clientHeight : 500) - 220);
+      const autoGap = items.length > 1 ? Math.floor(availH / (items.length - 1)) : 50;
+      const dynamicGap = items.length === 2 ? Math.max(200, Math.min(280, autoGap)) : Math.max(50, Math.min(200, autoGap));
+      container.style.gap = `${dynamicGap}px`;
+
+      // 通常のフレックス列としてHTMLを生成 (インラインtop完全廃止で重なり防止)
+      const html = timelineMilestones.map((item, idx) => `
+        <div class="sb-timeline-milestone${idx === 0 ? ' active' : ''}" data-milestone-idx="${idx}" data-day="${escapeHtml(item.dayStr || '')}">
+          <div class="sb-timeline-point"></div>
+          <span class="sb-timeline-label">${escapeHtml(item.labelText)}</span>
+        </div>
+      `).join('');
+
+      container.innerHTML = html;
+      requestAnimationFrame(() => {
+        setActiveTimelineMilestone(0, true);
+        const allItems = container.querySelectorAll('.sb-timeline-milestone');
+        const trackEl = $('timeline-track');
+        if (allItems.length > 0 && trackEl) {
+          const first = allItems[0];
+          const last = allItems[allItems.length - 1];
+          const top = first.offsetTop + first.offsetHeight / 2;
+          const height = (last.offsetTop + last.offsetHeight / 2) - top;
+          trackEl.style.top = `${top}px`;
+          trackEl.style.height = `${Math.max(20, height)}px`;
+          trackEl.style.bottom = 'auto';
+        }
+      });
+    }
+
+    function setActiveTimelineMilestone(idx, moveHandle) {
+      if (!timelineMilestones[idx]) return;
+      activeMilestoneIdx = idx;
+
+      const container = $('timeline-milestones');
+      const all = container ? container.querySelectorAll('.sb-timeline-milestone') : [];
+      all.forEach((el, i) => el.classList.toggle('active', i === idx));
+
+      if (moveHandle && all[idx]) {
+        const handleEl = $('timeline-handle');
+        const targetEl = all[idx];
+        if (handleEl && targetEl) {
+          const topPos = targetEl.offsetTop + targetEl.offsetHeight / 2;
+          handleEl.style.top = `${topPos}px`;
+        }
+      }
+    }
+
+    async function jumpToTimelineMilestone(idx) {
+      const item = timelineMilestones[idx];
+      if (!item) return;
+
+      if (item.type === 'time') {
+        const targetElem = document.querySelector(`[data-event-index="${item.targetIndex}"]`);
+        if (targetElem) {
+          targetElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      } else if (item.type === 'day') {
+        const dayDivider = document.querySelector(`[data-date-divider="${item.dayStr}"]`);
+        if (dayDivider) {
+          dayDivider.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+          // メイン画面に該当日データがまだロードされていない場合は、該当日のフィルターを設定してロード
+          $('filter-from').value = item.dayStr;
+          $('filter-to').value = item.dayStr;
+          searchActive = false;
+          await load();
+        }
+      }
+    }
+
+    $('timeline-back-btn')?.addEventListener('click', async () => {
+      $('filter-from').value = '';
+      $('filter-to').value = '';
+      $('query').value = '';
+      searchActive = false;
+      await load();
+      await fetchAllDays();
+      updateTimelineView(searchResults);
+    });
+
+    function initTimelineSliderEvents() {
+      const container = $('timeline-container');
+      const milestonesEl = $('timeline-milestones');
+      const handleEl = $('timeline-handle');
+      const pageEl = document.querySelector('section.page');
+      if (!container || !handleEl || !pageEl || !milestonesEl) return;
+
+      function handleDragAt(clientY) {
+        if (!timelineMilestones.length) return;
+        const rect = container.getBoundingClientRect();
+        const y = clientY - rect.top;
+
+        // 最も近いマイルストーンを探す
+        const items = milestonesEl.querySelectorAll('.sb-timeline-milestone');
+        let closestIdx = 0;
+        let minDiff = Infinity;
+        items.forEach((el, idx) => {
+          const elMidY = el.offsetTop + el.offsetHeight / 2;
+          const diff = Math.abs(elMidY - y);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestIdx = idx;
+          }
+        });
+
+        handleEl.style.top = `${y}px`;
+        setActiveTimelineMilestone(closestIdx, false);
+        jumpToTimelineMilestone(closestIdx);
+      }
+
+      handleEl.addEventListener('mousedown', (e) => {
+        isTimelineDragging = true;
+        handleEl.classList.add('dragging');
+        e.preventDefault();
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isTimelineDragging) return;
+        handleDragAt(e.clientY);
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isTimelineDragging) {
+          isTimelineDragging = false;
+          handleEl.classList.remove('dragging');
+          setActiveTimelineMilestone(activeMilestoneIdx, true);
+        }
+      });
+
+      // マイルストーンクリック
+      container.addEventListener('click', (e) => {
+        const ms = e.target.closest?.('.sb-timeline-milestone');
+        if (ms) {
+          const idx = Number(ms.dataset.milestoneIdx);
+          if (!Number.isNaN(idx)) {
+            setActiveTimelineMilestone(idx, true);
+            jumpToTimelineMilestone(idx);
+          }
+          return;
+        }
+        if (e.target.closest?.('#timeline-track')) {
+          handleDragAt(e.clientY);
+        }
+      });
+
+      // マイルストーンダブルクリックでその日の時刻詳細へ切り替え
+      container.addEventListener('dblclick', async (e) => {
+        const ms = e.target.closest?.('.sb-timeline-milestone');
+        if (ms) {
+          const idx = Number(ms.dataset.milestoneIdx);
+          const item = timelineMilestones[idx];
+          if (item && item.type === 'day') {
+            $('filter-from').value = item.dayStr;
+            $('filter-to').value = item.dayStr;
+            searchActive = false;
+            await load();
+          }
+        }
+      });
+
+      // メイン画面スクロール追従
+      let scrollTimer = null;
+      pageEl.addEventListener('scroll', () => {
+        if (isTimelineDragging || sidebarMode !== 'timeline' || !timelineMilestones.length) return;
+        if (scrollTimer) cancelAnimationFrame(scrollTimer);
+        scrollTimer = requestAnimationFrame(() => {
+          const pageRect = pageEl.getBoundingClientRect();
+
+          if (timelineDisplayMode === 'times') {
+            const events = pageEl.querySelectorAll('.event');
+            let currentEvent = null;
+            for (const ev of events) {
+              const evRect = ev.getBoundingClientRect();
+              if (evRect.top >= pageRect.top - 60) {
+                currentEvent = ev;
+                break;
+              }
+            }
+            if (!currentEvent && events.length) currentEvent = events[events.length - 1];
+            if (currentEvent) {
+              const idx = Number(currentEvent.dataset.eventIndex);
+              let matchedIdx = 0;
+              for (let i = timelineMilestones.length - 1; i >= 0; i--) {
+                if (idx >= timelineMilestones[i].targetIndex) {
+                  matchedIdx = i;
+                  break;
+                }
+              }
+              setActiveTimelineMilestone(matchedIdx, true);
+            }
+          } else {
+            const dividers = pageEl.querySelectorAll('.timeline-date-divider');
+            let currentDivider = null;
+            for (const div of dividers) {
+              const divRect = div.getBoundingClientRect();
+              if (divRect.top <= pageRect.top + 120) {
+                currentDivider = div;
+              } else {
+                break;
+              }
+            }
+            if (!currentDivider && dividers.length) currentDivider = dividers[0];
+            if (currentDivider) {
+              const dayStr = currentDivider.dataset.dateDivider;
+              const idx = timelineMilestones.findIndex((m) => m.dayStr === dayStr);
+              if (idx >= 0) setActiveTimelineMilestone(idx, true);
+            }
+          }
+        });
+      }, { passive: true });
+    }
+
     applyAppearance();
     updateDateFields();
     applyLang();
+    initTimelineSliderEvents();
     if (!isSearchWindow) { checkUpdate(); setInterval(checkUpdate, 6 * 60 * 60 * 1000); }
     if (!isSearchWindow) load().catch(err => { $('timeline').innerHTML = `<div class="empty">${t('loadFailed')}${escapeHtml(String(err))}</div>`; });
   </script>
