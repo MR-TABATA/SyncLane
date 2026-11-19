@@ -380,6 +380,7 @@ pub struct Range<'a> {
     pub date_from: Option<&'a str>,
     pub date_to: Option<&'a str>,
     pub project: Option<&'a str>,
+    pub session_id: Option<i64>,
     pub query: Option<&'a str>,
     pub label: Option<&'a str>,
 }
@@ -389,7 +390,7 @@ pub struct Range<'a> {
 /// 話題は、新しいほうから `MAX_SECTIONS` 件まで。依頼文(`options.prompt`)は、全体の先頭に 1 回だけ付く。
 pub fn range_markdown(conn: &Connection, range: &Range, options: &Options) -> Result<Exported> {
     // 画面の一覧と同じ探し方(完全一致が無ければ、あいまい一致で探し直す)
-    let hits = crate::db::timeline_search(conn, range.date_from, range.date_to, range.project, range.query, MAX_EVENTS, crate::db::SearchOrder::Newest, true)?;
+    let hits = crate::db::timeline_search_page(conn, range.date_from, range.date_to, range.project, range.session_id, range.query, MAX_EVENTS, 0, crate::db::SearchOrder::Newest, true)?;
     let mut events = hits.events;
     if hits.fuzzy {
         // あいまい一致の結果は点数順。話題は「当たった発言を新しい順に見て、新しいほうから MAX_SECTIONS 件」拾う作りなので、
@@ -662,6 +663,12 @@ mod tests {
         let late = range_markdown(&conn, &Range { date_from: Some("2026-10-20T02:00:00"), ..Range::default() }, &Options::default()).unwrap();
         assert_eq!(late.sections, 1);
         assert!(late.markdown.contains("次の話題です") && !late.markdown.contains("ビルドが通らない"));
+        // セッションIDでの絞り込み
+        let sid: i64 = conn.query_row("SELECT id FROM sessions LIMIT 1", [], |r| r.get(0)).unwrap();
+        let by_session = range_markdown(&conn, &Range { session_id: Some(sid), ..Range::default() }, &Options::default()).unwrap();
+        assert_eq!(by_session.sections, 2);
+        // 存在しないセッションIDなら断る
+        assert!(range_markdown(&conn, &Range { session_id: Some(9999), ..Range::default() }, &Options::default()).is_err());
         // 何も当たらないときは、断る
         assert!(range_markdown(&conn, &Range { project: Some("/nothing"), ..Range::default() }, &Options::default()).is_err());
         assert!(range_markdown(&conn, &Range { query: Some("存在しない言葉"), ..Range::default() }, &Options::default()).is_err());

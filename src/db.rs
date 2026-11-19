@@ -482,7 +482,7 @@ pub fn timeline_in_project(
     limit: usize,
     order: SearchOrder,
 ) -> Result<Vec<TimelineEvent>> {
-    search_events_in(conn, date_from, date_to, project, query, limit, has_search_index(conn), order)
+    search_events_in(conn, date_from, date_to, project, None, query, limit, 0, has_search_index(conn), order)
 }
 
 /// 検索の結果。`fuzzy` が true なら、完全一致が 1 件も無かったため、あいまい一致で探し直したもの
@@ -514,12 +514,39 @@ pub fn timeline_search(
     order: SearchOrder,
     allow_fuzzy: bool,
 ) -> Result<SearchHits> {
-    let events = search_events_in(conn, date_from, date_to, project, query, limit, has_search_index(conn), order)?;
+    timeline_search_page(conn, date_from, date_to, project, None, query, limit, 0, order, allow_fuzzy)
+}
+
+/// ページネーション（offset）および特定セッション指定（session_id）に対応した検索。
+#[allow(clippy::too_many_arguments)]
+pub fn timeline_search_page(
+    conn: &Connection,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+    project: Option<&str>,
+    session_id: Option<i64>,
+    query: Option<&str>,
+    limit: usize,
+    offset: usize,
+    order: SearchOrder,
+    allow_fuzzy: bool,
+) -> Result<SearchHits> {
+    let events = search_events_in(conn, date_from, date_to, project, session_id, query, limit, offset, has_search_index(conn), order)?;
     if !events.is_empty() || !allow_fuzzy || !can_fuzzy(query) {
         return Ok(SearchHits { events, fuzzy: false, warning: None });
     }
+    // 完全一致が0件のとき:
+    // offset > 0 であれば、最初のページ(offset=0)に完全一致があったか確認する。
+    // あれば単に完全一致の全結果を超えた終端なので空を返す。
+    // 最初のページも0件であれば、あいまい一致対象のクエリなので、あいまい一致の続き(offset)を返す。
+    if offset > 0 {
+        let first_page = search_events_in(conn, date_from, date_to, project, session_id, query, 1, 0, has_search_index(conn), order)?;
+        if !first_page.is_empty() {
+            return Ok(SearchHits { events: Vec::new(), fuzzy: false, warning: None });
+        }
+    }
     // あいまい一致は補助。失敗しても、完全一致が成功して「0 件」だった事実は届ける(原因は warning に入れる)
-    match fuzzy_scan(conn, date_from, date_to, project, query, limit) {
+    match fuzzy_scan(conn, date_from, date_to, project, session_id, query, limit, offset) {
         Ok((events, truncated)) => {
             let warning = truncated.then(|| format!("あいまい一致は、新しい順に {FUZZY_SCAN_LIMIT} 件までしか探していません(Fuzzy search looked only at the newest {FUZZY_SCAN_LIMIT} events)。期間やプロジェクトで絞ると、全体を探せます。"));
             Ok(SearchHits { events, fuzzy: true, warning })
@@ -547,7 +574,7 @@ pub fn timeline_fuzzy_in_project(
     query: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TimelineEvent>> {
-    Ok(fuzzy_scan(conn, date_from, date_to, project, query, limit)?.0)
+    Ok(fuzzy_scan(conn, date_from, date_to, project, None, query, limit, 0)?.0)
 }
 
 /// `timeline_fuzzy_in_project` の本体。2 つ目の値は、走査の上限(`FUZZY_SCAN_LIMIT`)で打ち切ったか。
@@ -556,8 +583,10 @@ fn fuzzy_scan(
     date_from: Option<&str>,
     date_to: Option<&str>,
     project: Option<&str>,
+    session_id: Option<i64>,
     query: Option<&str>,
     limit: usize,
+    offset: usize,
 ) -> Result<(Vec<TimelineEvent>, bool)> {
     let terms: Vec<crate::fuzzy::QueryTerm> = query.unwrap_or_default().split_whitespace().filter(|term| !term.is_empty()).map(crate::fuzzy::QueryTerm::new).collect();
     if terms.is_empty() || limit == 0 {
@@ -579,11 +608,14 @@ fn fuzzy_scan(
     if project.is_some() {
         conditions.push("s.project_path = ?".to_owned());
     }
+    if session_id.is_some() {
+        conditions.push("e.session_id = ?".to_owned());
+    }
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&conditions.join(" AND "));
     }
-    sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC");
+    sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC, e.id DESC");
     let mut stmt = conn.prepare(&sql)?;
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(date) = date_from {
@@ -595,7 +627,11 @@ fn fuzzy_scan(
     if let Some(project) = project {
         values.push(Box::new(project.to_owned()));
     }
-    // 新しい順に流し読みして、点数の上位だけ残す(使う記憶は、件数の上限分だけ)
+    if let Some(sid) = session_id {
+        values.push(Box::new(sid));
+    }
+    // 新しい順に流し読みして、点数の上位だけ残す(使う記憶は、limit + offset 件)
+    let max_keep = limit.saturating_add(offset);
     let mut heap: BinaryHeap<Reverse<Scored>> = BinaryHeap::new();
     let mut seen: u64 = 0;
     let mut scanned: usize = 0;
@@ -612,14 +648,14 @@ fn fuzzy_scan(
         if let Some(points) = fuzzy_points(&terms, &event, &mut buffer) {
             heap.push(Reverse(Scored { points, at: event.occurred_at.clone(), seq: seen, event }));
             seen += 1;
-            if heap.len() > limit {
+            if heap.len() > max_keep {
                 heap.pop(); // 最も点の低いものを捨てる
             }
         }
     }
     let mut scored: Vec<Scored> = heap.into_iter().map(|r| r.0).collect();
     scored.sort_by(|a, b| b.cmp(a)); // ヒープの取り出し順は不同なので、並べ直す
-    let mut events: Vec<TimelineEvent> = scored.into_iter().map(|s| s.event).collect();
+    let mut events: Vec<TimelineEvent> = scored.into_iter().skip(offset).take(limit).map(|s| s.event).collect();
     crate::sections::attach(conn, &mut events)?;
     Ok((events, truncated))
 }
@@ -720,7 +756,7 @@ fn search_events_by(
     indexed: bool,
     order: SearchOrder,
 ) -> Result<Vec<TimelineEvent>> {
-    search_events_in(conn, date_from, date_to, None, query, limit, indexed, order)
+    search_events_in(conn, date_from, date_to, None, None, query, limit, 0, indexed, order)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -729,8 +765,10 @@ fn search_events_in(
     date_from: Option<&str>,
     date_to: Option<&str>,
     project: Option<&str>,
+    session_id: Option<i64>,
     query: Option<&str>,
     limit: usize,
+    offset: usize,
     indexed: bool,
     order: SearchOrder,
 ) -> Result<Vec<TimelineEvent>> {
@@ -758,6 +796,9 @@ fn search_events_in(
     if project.is_some() {
         conditions.push("s.project_path = ?".to_owned());
     }
+    if session_id.is_some() {
+        conditions.push("e.session_id = ?".to_owned());
+    }
     // 索引で探せる語を先に評価する(AND は、前から評価されるので、重い本文の直接検索は、絞られた結果にだけ掛かる)
     let mut ordered: Vec<&str> = terms.clone();
     ordered.sort_by_key(|term| !(indexed && indexable(term)));
@@ -774,9 +815,9 @@ fn search_events_in(
         sql.push_str(&conditions.join(" AND "));
     }
     if ranked {
-        sql.push_str(&format!(" ORDER BY {} DESC, e.occurred_at DESC, e.sequence DESC LIMIT ?", score_sql(&terms)));
+        sql.push_str(&format!(" ORDER BY {} DESC, e.occurred_at DESC, e.sequence DESC, e.id DESC LIMIT ? OFFSET ?", score_sql(&terms)));
     } else {
-        sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC LIMIT ?");
+        sql.push_str(" ORDER BY e.occurred_at DESC, e.sequence DESC, e.id DESC LIMIT ? OFFSET ?");
     }
 
     let mut stmt = conn.prepare(&sql)?;
@@ -789,6 +830,9 @@ fn search_events_in(
     }
     if let Some(project) = project {
         values.push(Box::new(project.to_owned()));
+    }
+    if let Some(sid) = session_id {
+        values.push(Box::new(sid));
     }
     for term in &ordered {
         values.push(Box::new(if indexed && indexable(term) { fts_phrase(term) } else { (*term).to_owned() }));
@@ -803,6 +847,7 @@ fn search_events_in(
         }
     }
     values.push(Box::new(limit as i64));
+    values.push(Box::new(offset as i64));
     let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_timeline_event)?;
     let mut events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     crate::sections::attach(conn, &mut events)?;
@@ -1330,6 +1375,127 @@ mod tests {
         fuzzy_corpus(&conn);
         assert!(timeline_search(&conn, None, None, None, Some("authentication"), 30, SearchOrder::Newest, true)?.warning.is_none());
         assert!(timeline_search(&conn, None, None, None, Some("authnetication"), 30, SearchOrder::Newest, true)?.warning.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn timeline_search_page_respects_offset_and_session_id() -> Result<()> {
+        let conn = open_memory()?;
+        let s1 = conn.query_row(
+            "INSERT INTO sessions(source_tool, project_path, started_at) VALUES ('claude_code', '/work/A', '2026-11-19 10:00:00') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        let s2 = conn.query_row(
+            "INSERT INTO sessions(source_tool, project_path, started_at) VALUES ('codex', '/work/B', '2026-11-19 11:00:00') RETURNING id",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+
+        for i in 1..=5 {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+                 VALUES (?1, 'claude_code', ?2, ?3, 'user', ?4, ?5)",
+                params![s1, format!("e_s1_{i}"), format!("2026-11-19 10:0{i}:00"), format!("S1 msg {i}"), i],
+            )?;
+        }
+        for i in 1..=3 {
+            conn.execute(
+                "INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence)
+                 VALUES (?1, 'codex', ?2, ?3, 'user', ?4, ?5)",
+                params![s2, format!("e_s2_{i}"), format!("2026-11-19 11:0{i}:00"), format!("S2 msg {i}"), i],
+            )?;
+        }
+
+        // session_id 指定: s1 の 5件のみ取れる
+        let s1_hits = timeline_search_page(&conn, None, None, None, Some(s1), None, 10, 0, SearchOrder::Newest, true)?;
+        assert_eq!(s1_hits.events.len(), 5);
+        assert!(s1_hits.events.iter().all(|e| e.session_id == s1));
+
+        // offset 指定: limit 2, offset 0 -> 2件
+        let page1 = timeline_search_page(&conn, None, None, None, Some(s1), None, 2, 0, SearchOrder::Newest, true)?;
+        assert_eq!(page1.events.len(), 2);
+        assert_eq!(page1.events[0].content, "S1 msg 5");
+        assert_eq!(page1.events[1].content, "S1 msg 4");
+
+        // offset 指定: limit 2, offset 2 -> 2件（次のページ）
+        let page2 = timeline_search_page(&conn, None, None, None, Some(s1), None, 2, 2, SearchOrder::Newest, true)?;
+        assert_eq!(page2.events.len(), 2);
+        assert_eq!(page2.events[0].content, "S1 msg 3");
+        assert_eq!(page2.events[1].content, "S1 msg 2");
+
+        // キーワード検索付きページ送り (offset: 0, 1)
+        let q_page1 = timeline_search_page(&conn, None, None, None, Some(s1), Some("msg"), 2, 0, SearchOrder::Newest, true)?;
+        assert_eq!(q_page1.events.len(), 2);
+        assert_eq!(q_page1.events[0].content, "S1 msg 5");
+        assert_eq!(q_page1.events[1].content, "S1 msg 4");
+        let q_page2 = timeline_search_page(&conn, None, None, None, Some(s1), Some("msg"), 2, 2, SearchOrder::Newest, true)?;
+        assert_eq!(q_page2.events.len(), 2);
+        assert_eq!(q_page2.events[0].content, "S1 msg 3");
+        assert_eq!(q_page2.events[1].content, "S1 msg 2");
+
+        // 全体（session_idなし）: 合計 8件
+        let all_hits = timeline_search_page(&conn, None, None, None, None, None, 10, 0, SearchOrder::Newest, true)?;
+        assert_eq!(all_hits.events.len(), 8);
+
+        Ok(())
+    }
+
+    #[test]
+    fn fuzzy_search_supports_pagination_and_session_id() -> Result<()> {
+        let conn = open_memory()?;
+        let s1 = conn.query_row("INSERT INTO sessions(source_tool, project_path) VALUES ('cc', '/w') RETURNING id", [], |r| r.get::<_, i64>(0))?;
+        let s2 = conn.query_row("INSERT INTO sessions(source_tool, project_path) VALUES ('codex', '/w') RETURNING id", [], |r| r.get::<_, i64>(0))?;
+
+        // 3件の誤字対象イベント（"authentication" に対する誤字 "authnetication" で検索）
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'e1', '2026-10-20T01:00:00.000Z', 'user', 'note authentication 1', 1)", [s1])?;
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'e2', '2026-10-21T01:00:00.000Z', 'user', 'note authentication 2', 2)", [s1])?;
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'e3', '2026-10-22T01:00:00.000Z', 'user', 'note authentication 3', 1)", [s2])?;
+
+        // 1ページ目 (limit 2, offset 0) -> 2件 (e3, e2: 新しい順)
+        let page1 = timeline_search_page(&conn, None, None, None, None, Some("authnetication"), 2, 0, SearchOrder::Newest, true)?;
+        assert!(page1.fuzzy);
+        assert_eq!(page1.events.len(), 2);
+        assert_eq!(page1.events[0].source_event_id, "e3");
+        assert_eq!(page1.events[1].source_event_id, "e2");
+
+        // 2ページ目 (limit 2, offset 2) -> 1件 (e1)
+        let page2 = timeline_search_page(&conn, None, None, None, None, Some("authnetication"), 2, 2, SearchOrder::Newest, true)?;
+        assert!(page2.fuzzy);
+        assert_eq!(page2.events.len(), 1);
+        assert_eq!(page2.events[0].source_event_id, "e1");
+
+        // 3ページ目 (limit 2, offset 4) -> 0件
+        let page3 = timeline_search_page(&conn, None, None, None, None, Some("authnetication"), 2, 4, SearchOrder::Newest, true)?;
+        assert!(page3.fuzzy);
+        assert_eq!(page3.events.len(), 0);
+
+        // session_id 指定時のあいまい検索 (s1 のみ -> e2, e1)
+        let s1_fuzzy = timeline_search_page(&conn, None, None, None, Some(s1), Some("authnetication"), 10, 0, SearchOrder::Newest, true)?;
+        assert!(s1_fuzzy.fuzzy);
+        assert_eq!(s1_fuzzy.events.len(), 2);
+        assert_eq!(s1_fuzzy.events[0].source_event_id, "e2");
+        assert_eq!(s1_fuzzy.events[1].source_event_id, "e1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_order_tie_break_is_deterministic_by_id() -> Result<()> {
+        let conn = open_memory()?;
+        let s1 = conn.query_row("INSERT INTO sessions(source_tool, project_path) VALUES ('cc', '/w') RETURNING id", [], |r| r.get::<_, i64>(0))?;
+        let s2 = conn.query_row("INSERT INTO sessions(source_tool, project_path) VALUES ('cc', '/w') RETURNING id", [], |r| r.get::<_, i64>(0))?;
+
+        // 別セッションで同じ occurred_at と sequence を持つイベント（id のみが異なる）
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'first', '2026-10-20T01:00:00.000Z', 'user', 'same time', 1)", [s1])?;
+        conn.execute("INSERT INTO events(session_id, source_tool, source_event_id, occurred_at, role, content, sequence) VALUES (?1, 'x', 'second', '2026-10-20T01:00:00.000Z', 'user', 'same time', 1)", [s2])?;
+
+        let hits = timeline_search_page(&conn, None, None, None, None, None, 2, 0, SearchOrder::Newest, true)?;
+        assert_eq!(hits.events.len(), 2);
+        // id DESC により、後から INSERT された second が先に来る
+        assert_eq!(hits.events[0].source_event_id, "second");
+        assert_eq!(hits.events[1].source_event_id, "first");
+
         Ok(())
     }
 

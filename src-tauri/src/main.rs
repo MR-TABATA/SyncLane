@@ -46,13 +46,26 @@ fn timeline(
     date_to: Option<String>,
     query: Option<String>,
     limit: usize,
+    offset: Option<usize>,
     sort: Option<String>,
     project: Option<String>,
+    session_id: Option<i64>,
     state: tauri::State<'_, AppState>,
 ) -> Result<db::SearchHits, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let order = if sort.as_deref() == Some("relevance") { db::SearchOrder::Relevance } else { db::SearchOrder::Newest };
-    db::timeline_search(&conn, date_from.as_deref(), date_to.as_deref(), project.as_deref(), query.as_deref(), limit, order, true).map_err(|e| e.to_string())
+    db::timeline_search_page(
+        &conn,
+        date_from.as_deref(),
+        date_to.as_deref(),
+        project.as_deref(),
+        session_id,
+        query.as_deref(),
+        limit,
+        offset.unwrap_or(0),
+        order,
+        true,
+    ).map_err(|e| e.to_string())
 }
 
 /// トークン数の集計(期間・単位別)。読み取りだけ。`group_by` は `day` / `project` / `model` / `tool`。`utc_offset_minutes` は、日別を端末の時刻で切るための時差。
@@ -140,6 +153,7 @@ fn export_range(
     date_from: Option<String>,
     date_to: Option<String>,
     project: Option<String>,
+    session_id: Option<i64>,
     query: Option<String>,
     label: Option<String>,
     keep_secrets: bool,
@@ -155,6 +169,7 @@ fn export_range(
         date_from: date_from.as_deref(),
         date_to: date_to.as_deref(),
         project: project.as_deref(),
+        session_id,
         query: query.as_deref(),
         label: label.as_deref(),
     };
