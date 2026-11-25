@@ -2,13 +2,21 @@ mod ingest_server;
 mod sync_app;
 
 use synclane::{db, importer};
+use notify::Watcher;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::ManagerExt;
+
+static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
 pub struct AppState(pub Arc<Mutex<Connection>>);
 
@@ -251,10 +259,73 @@ fn mcp_executable() -> Result<String, String> {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn autostart_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        app.autolaunch().enable().map_err(|e| e.to_string())
+    } else {
+        app.autolaunch().disable().map_err(|e| e.to_string())
+    }
+}
+
 /// メニューの「設定…」(⌘,)。選ぶと、画面に `open-settings` を知らせる。
 const OPEN_SETTINGS: &str = "open-settings";
 /// メニューの「検索…」(⌘F)。選ぶと、画面に `open-search` を知らせる。
 const OPEN_SEARCH: &str = "open-search";
+/// メニューの「SyncLane を終了」(⌘Q)。
+const APP_QUIT: &str = "app-quit";
+
+/// トレイメニューの各項目 ID
+const TRAY_SHOW: &str = "tray-show";
+const TRAY_SEARCH: &str = "tray-search";
+const TRAY_QUIT: &str = "tray-quit";
+
+/// メニューバーのトレイアイコンを組む。
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let ja = sys_locale::get_locale().map(|l| l.to_lowercase().starts_with("ja")).unwrap_or(false);
+    let show_item = MenuItem::with_id(app, TRAY_SHOW, if ja { "SyncLane を表示" } else { "Show SyncLane" }, true, None::<&str>)?;
+    let search_item = MenuItem::with_id(app, TRAY_SEARCH, if ja { "検索…" } else { "Find…" }, true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit_item = MenuItem::with_id(app, TRAY_QUIT, if ja { "SyncLane を終了" } else { "Quit SyncLane" }, true, None::<&str>)?;
+    let tray_menu = Menu::with_items(app, &[&show_item, &search_item, &separator, &quit_item])?;
+
+    let icon = app.default_window_icon().cloned().or_else(|| {
+        Image::from_bytes(include_bytes!("../icons/32x32.png")).ok()
+    });
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&tray_menu)
+        .show_menu_on_left_click(true)
+        .tooltip("SyncLane")
+        .on_menu_event(|app, event| {
+            let id = event.id();
+            if id == TRAY_SHOW {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            } else if id == TRAY_SEARCH {
+                let _ = open_search_window(app.clone());
+            } else if id == TRAY_QUIT {
+                IS_QUITTING.store(true, Ordering::SeqCst);
+                app.exit(0);
+            }
+        });
+
+    if let Some(icon) = icon {
+        builder = builder.icon(icon);
+    }
+
+    let _tray = builder.build(app)?;
+
+    Ok(())
+}
 
 /// 画面上部のメニューバー。既定のメニューは英語固定なので、システムの言語に合わせて自前で組む。
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
@@ -276,7 +347,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::hide_others(app, t("ほかを隠す", "Hide Others"))?,
             &PredefinedMenuItem::show_all(app, t("すべてを表示", "Show All"))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, t("SyncLane を終了", "Quit SyncLane"))?,
+            &MenuItem::with_id(app, APP_QUIT, if ja { "SyncLane を終了" } else { "Quit SyncLane" }, true, Some("CmdOrCtrl+Q"))?,
         ],
     )?;
     let edit_menu = Submenu::with_items(
@@ -346,6 +417,25 @@ fn collect_codex(conn: &Arc<Mutex<Connection>>, root: &std::path::Path, handle: 
     }
 }
 
+/// 会話ログディレクトリの変更を macOS FSEvents で監視する Watcher を生成する。
+fn setup_watcher(tx: std::sync::mpsc::Sender<()>, dirs: &[std::path::PathBuf]) -> Option<notify::RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res {
+            if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
+                let _ = tx.send(());
+            }
+        }
+    }).ok()?;
+
+    for dir in dirs {
+        if dir.exists() {
+            let _ = watcher.watch(dir, notify::RecursiveMode::Recursive);
+        }
+    }
+
+    Some(watcher)
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == "--mcp") {
         run_mcp();
@@ -357,19 +447,40 @@ fn main() {
     let sync_state = sync_app::SyncState::new(path.clone());
     let collector_conn = Arc::clone(&shared_conn);
     let ingest_conn = Arc::clone(&shared_conn);
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .on_menu_event(|app, event| {
             let id = event.id();
             if id == OPEN_SETTINGS || id == OPEN_SEARCH {
                 let _ = app.emit(id.as_ref(), ());
+            } else if id == APP_QUIT {
+                IS_QUITTING.store(true, Ordering::SeqCst);
+                app.exit(0);
+            }
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !IS_QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .manage(AppState(shared_conn))
         .manage(sync_state.clone())
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
+            setup_tray(app.handle())?;
+            if std::env::args().any(|arg| arg == "--minimized") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             // サーバーへの送信(接続したときだけ動く。接続していなければ、何もしない)
             sync_app::spawn_loop(sync_state, app.handle().clone());
             // ブラウザ拡張(Web 版の Gemini)からの取り込みを受ける
@@ -420,6 +531,16 @@ fn main() {
                         eprintln!("synclane token usage (gemini): {error:#}");
                     }
                 }
+                // 会話ログの変更検知(macOS FSEvents)を設定する
+                let (notify_tx, notify_rx) = channel();
+                let watch_dirs = vec![
+                    root.clone(),
+                    antigravity_root.join("conversations"),
+                    codex_root.clone(),
+                    copilot_root.clone(),
+                    gemini_root.clone(),
+                ];
+                let _watcher = setup_watcher(notify_tx, &watch_dirs);
                 loop {
                     if let Ok(mut conn) = collector_conn.lock() {
                         match importer::collect_claude_incremental(&root, &mut conn) {
@@ -464,18 +585,46 @@ fn main() {
                             Err(error) => eprintln!("synclane antigravity: {error:#}"),
                         }
                     }
-                    thread::sleep(Duration::from_secs(30));
+                    // ファイル変更イベントを待つ(最大60秒でタイムアウトしてバックアップ定期収集)
+                    match notify_rx.recv_timeout(Duration::from_secs(60)) {
+                        Ok(()) => {
+                            // イベント検知！連続書き込みを吸収するため 500ms デバウンス
+                            thread::sleep(Duration::from_millis(500));
+                            while notify_rx.try_recv().is_ok() {}
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             status, timeline, timeline_days, project_overview, sessions_by_tool, usage_summary, mcp_executable, open_search_window, close_search_window,
+            autostart_is_enabled, autostart_set_enabled,
             section_title_suggest, section_title_set, export_section, export_range, resume_command, resume_open,
             sync_app::sync_overview, sync_app::sync_sessions, sync_app::sync_set_mode, sync_app::sync_select,
             sync_app::sync_select_all, sync_app::sync_rules, sync_app::sync_set_rules, sync_app::sync_connect, sync_app::sync_connect_cancel,
             sync_app::sync_disconnect, sync_app::sync_now, sync_app::mask_lists_get, sync_app::mask_lists_set
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running SyncLane");
+        .build(tauri::generate_context!())
+        .expect("error while building SyncLane");
+
+    app.run(|app_handle, event| {
+        match event {
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            tauri::RunEvent::ExitRequested { .. } => {
+                if !IS_QUITTING.load(Ordering::SeqCst) {
+                    IS_QUITTING.store(true, Ordering::SeqCst);
+                }
+            }
+            _ => {}
+        }
+    });
 }

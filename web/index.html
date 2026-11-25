@@ -1029,14 +1029,22 @@
       </div>
       <div class="settings-body">
         <nav class="settings-nav" role="tablist">
-          <button class="settings-nav-item active" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
+          <button class="settings-nav-item active" type="button" data-tab="general" data-i18n="navGeneral">一般</button>
+          <button class="settings-nav-item" type="button" data-tab="appearance" data-i18n="navAppearance">外観</button>
           <button class="settings-nav-item" type="button" data-tab="lang" data-i18n="navLang">言語</button>
           <button class="settings-nav-item" type="button" data-tab="mcp">MCP</button>
           <button class="settings-nav-item" type="button" data-tab="mask" data-i18n="navMask">秘密の伏せ方</button>
           <button class="settings-nav-item" type="button" data-tab="server" data-i18n="navServer" hidden>サーバー</button>
         </nav>
         <div class="settings-content">
-          <section class="settings-pane active" data-pane="appearance">
+          <section class="settings-pane active" data-pane="general">
+            <div class="opt-title" data-i18n="residentHeading">常駐</div>
+            <p class="note" data-i18n="residentNote" style="margin-bottom:12px;">ウィンドウを閉じてもバックグラウンドで取り込みを続け、メニューバーのアイコンに残ります。</p>
+            <div class="opt-title" data-i18n="startupHeading">起動</div>
+            <label class="opt-row" style="align-items:center; cursor:pointer;"><input id="autostart-checkbox" type="checkbox"><span data-i18n="launchAtLogin">ログイン時に自動で起動する</span></label>
+            <p class="note" data-i18n="launchAtLoginNote" style="margin-top:6px;">Mac のログイン時に SyncLane を自動起動し、バックグラウンドで会話の記録を収集します。</p>
+          </section>
+          <section class="settings-pane" data-pane="appearance">
             <div class="opt-title" data-i18n="accentLabel">アクセントカラー</div>
             <div id="accent-option" class="color-option"></div>
             <div class="opt-title" data-i18n="bgLabel">背景色</div>
@@ -1128,6 +1136,8 @@
         maskAllowHelp: '1 行に 1 つ。値が完全に一致したときだけ、そのまま送ります。ここに書いた値は、外に出ます。',
         maskBlockPlaceholder: '例:\ncorp-db-01\ntabata_key=\nre:(?i)project-[a-z]+', maskAllowPlaceholder: '例:\ndemo-pass-123',
         maskSaved: (n) => n ? `保存しました（正規表現として読めない ${n} 行は、無視します）` : '保存しました', maskFailed: (e) => `保存できませんでした: ${e}`,
+        navGeneral: '一般', residentHeading: '常駐', residentNote: 'ウィンドウを閉じてもバックグラウンドで取り込みを続け、メニューバーのアイコンに残ります。',
+        startupHeading: '起動', launchAtLogin: 'ログイン時に自動で起動する', launchAtLoginNote: 'Mac のログイン時に SyncLane を自動起動し、バックグラウンドで会話の記録を収集します。',
         settingsTip: '設定（⌘,）', navAppearance: '外観', navLang: '言語', language: '表示する言語', langSystem: 'システムに従う',
         accentLabel: 'アクセントカラー', bgLabel: '背景色', textLabel: '文字色', fontLabel: '本文フォント', fontSizeLabel: '本文サイズ',
         colorSystem: 'システム', colorDefault: '既定', colorCustom: 'カスタム…', fontSystem: 'システム (SF)', fontSerif: 'セリフ', fontRounded: 'ラウンド',
@@ -1169,6 +1179,8 @@
         maskAllowHelp: 'One per line. A value is sent as it is only when it matches exactly. What you write here leaves your Mac.',
         maskBlockPlaceholder: 'e.g.\ncorp-db-01\ntabata_key=\nre:(?i)project-[a-z]+', maskAllowPlaceholder: 'e.g.\ndemo-pass-123',
         maskSaved: (n) => n ? `Saved (${n} line(s) that are not valid regular expressions are ignored)` : 'Saved', maskFailed: (e) => `Could not save: ${e}`,
+        navGeneral: 'General', residentHeading: 'Background', residentNote: 'SyncLane continues collecting conversations in the background after closing windows, staying in the menu bar.',
+        startupHeading: 'Startup', launchAtLogin: 'Launch at login', launchAtLoginNote: 'Start SyncLane automatically on login to collect conversation history in the background.',
         settingsTip: 'Settings (⌘,)', navAppearance: 'Appearance', navLang: 'Language', language: 'Display language', langSystem: 'Match system',
         accentLabel: 'Accent color', bgLabel: 'Background', textLabel: 'Text color', fontLabel: 'Content font', fontSizeLabel: 'Content size',
         colorSystem: 'System', colorDefault: 'Default', colorCustom: 'Custom…', fontSystem: 'System (SF)', fontSerif: 'Serif', fontRounded: 'Rounded',
@@ -1315,9 +1327,29 @@
       title.textContent = t(title.dataset.i18n);
       // サーバーの画面には、設定の項目の一覧(外観・言語・MCP)を出さない
       document.querySelector('.settings-nav').hidden = tab === 'server';
+      if (tab === 'general') updateAutostartCheckbox();
       if (tab === 'mcp') fillMcpCommand();
       if (tab === 'mask') loadMaskLists();
     }
+    async function updateAutostartCheckbox() {
+      if (!invoke) return;
+      try {
+        const enabled = await invoke('autostart_is_enabled');
+        const cb = $('autostart-checkbox');
+        if (cb) cb.checked = !!enabled;
+      } catch (error) {
+        console.error('Failed to get autostart status:', error);
+      }
+    }
+    $('autostart-checkbox').addEventListener('change', async (e) => {
+      if (!invoke) return;
+      try {
+        await invoke('autostart_set_enabled', { enabled: e.target.checked });
+      } catch (error) {
+        console.error('Failed to set autostart status:', error);
+        updateAutostartCheckbox();
+      }
+    });
     async function loadMaskLists() {
       if (!invoke) return;
       $('mask-status').textContent = '';
@@ -1353,7 +1385,7 @@
       btn.textContent = t('mcpCopied');
       setTimeout(() => { btn.textContent = t('mcpCopy'); }, 1500);
     }));
-    $('settings-btn').addEventListener('click', () => { showSettingsTab('appearance'); $('settings-overlay').hidden = false; fillMcpCommand(); });
+    $('settings-btn').addEventListener('click', () => { showSettingsTab('general'); $('settings-overlay').hidden = false; fillMcpCommand(); updateAutostartCheckbox(); });
     $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
     $('settings-overlay').addEventListener('click', (e) => { if (e.target === $('settings-overlay')) $('settings-overlay').hidden = true; });
 
@@ -2161,7 +2193,7 @@
     // ⌘, はアプリのメニュー(設定…)が受けて、ここへ知らせる
     if (!isSearchWindow) window.__TAURI__?.event?.listen('open-settings', () => {
       $('settings-overlay').hidden = !$('settings-overlay').hidden;
-      if (!$('settings-overlay').hidden) fillMcpCommand();
+      if (!$('settings-overlay').hidden) { fillMcpCommand(); updateAutostartCheckbox(); }
     });
     $('previous').addEventListener('click', () => moveSearch(-1));
     $('next').addEventListener('click', () => moveSearch(1));
