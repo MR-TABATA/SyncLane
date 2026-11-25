@@ -10,6 +10,39 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "== CI チェック: 現在のコミットの GitHub Actions CI が Pass しているか確認"
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+if command -v gh >/dev/null 2>&1; then
+    echo "GitHub Actions CI の実行状況を取得中 (commit: $COMMIT)..."
+    RUN_ID=""
+    # push 直後で Actions に反映されるまで数秒かかる場合があるため、最大 30 秒リトライ
+    for i in 1 2 3 4 5 6; do
+        RUN_ID="$(gh run list -R MR-TABATA/SyncLane --commit "$COMMIT" --workflow "CI" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)"
+        if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+            break
+        fi
+        echo "  CI run の開始を待機中... ($i/6)"
+        sleep 5
+    done
+
+    if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+        echo "エラー: コミット $COMMIT に対する CI run が見つかりません。先に git push origin main を実行してください。"
+        exit 1
+    fi
+
+    echo "CI run ID: $RUN_ID を確認中..."
+    gh run watch "$RUN_ID" -R MR-TABATA/SyncLane --exit-status || {
+        echo ""
+        echo "❌ エラー: GitHub Actions CI が失敗しました。リリースを中断します。"
+        echo "   修正して CI が Pass するのを確認してから再度実行してください。"
+        exit 1
+    }
+    echo "✅ CI チェック合格 (Pass)。"
+else
+    echo "警告: gh CLI がインストールされていないため、CI チェックをスキップします。"
+fi
+
 SITE_DIR="${SITE_DIR:-$HOME/Git/MrkTools/public/downloads/synclane}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-mreditor}"
 # 同名の証明書が System とログインの両方にあり、名前だと曖昧になるので、ログイン側のハッシュで指す(MrEditor と同じ)

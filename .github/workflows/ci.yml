@@ -6,11 +6,29 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-core:
+    name: CLI & Core Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
       - run: cargo build --locked
       - run: cargo test --locked
+
+  test-app:
+    name: macOS Desktop App Tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
