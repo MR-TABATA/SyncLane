@@ -298,11 +298,12 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, TRAY_QUIT, if ja { "SyncLane を終了" } else { "Quit SyncLane" }, true, None::<&str>)?;
     let tray_menu = Menu::with_items(app, &[&show_item, &search_item, &separator, &quit_item])?;
 
-    let icon = app.default_window_icon().cloned().or_else(|| {
-        Image::from_bytes(include_bytes!("../icons/32x32.png")).ok()
-    });
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        .ok()
+        .or_else(|| app.default_window_icon().cloned());
 
     let mut builder = TrayIconBuilder::new()
+        .icon_as_template(true)
         .menu(&tray_menu)
         .show_menu_on_left_click(true)
         .tooltip("SyncLane")

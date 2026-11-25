@@ -1,0 +1,4 @@
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- SyncLane トレイアイコン(macOS Template)。黒一色・透過背景。scripts/make-icons.py が作る。 -->
+  <path d="M50 12 V88" stroke="#000000" stroke-width="5.5" stroke-linecap="round" fill="none"/><circle cx="50" cy="24" r="4.5" fill="none" stroke="#000000" stroke-width="3.5"/><circle cx="50" cy="50" r="4.5" fill="none" stroke="#000000" stroke-width="3.5"/><circle cx="50" cy="76" r="4.5" fill="none" stroke="#000000" stroke-width="3.5"/><path d="M19 14.0 H36 a6 6 0 0 1 6 6 V32.0 a2.0 2.0 0 0 1 -2.0 2.0 H19 a6 6 0 0 1 -6 -6 V20.0 a6 6 0 0 1 6 -6Z" fill="#000000"/><path d="M64 40.0 H81 a6 6 0 0 1 6 6 V54.0 a6 6 0 0 1 -6 6 H60.0 a2.0 2.0 0 0 1 -2.0 -2.0 V46.0 a6 6 0 0 1 6 -6Z" fill="#000000"/><path d="M19 66.0 H36 a6 6 0 0 1 6 6 V84.0 a2.0 2.0 0 0 1 -2.0 2.0 H19 a6 6 0 0 1 -6 -6 V72.0 a6 6 0 0 1 6 -6Z" fill="#000000"/>
+</svg>

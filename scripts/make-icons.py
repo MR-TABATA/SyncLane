@@ -31,6 +31,26 @@ def glyph(bubble_color):
     s += bubble(50 - G - BW, ys[0], "br", bubble_color) + bubble(50 + G, ys[1], "bl", CORAL) + bubble(50 - G - BW, ys[2], "br", bubble_color)
     return s
 
+def tray_glyph(fill_color):
+    # メニューバー用(18x18pt / 32~36px)に視認性を最適化: 太めの線・リングノード・単色透過
+    tg_bw, tg_bh, tg_gap, tg_g, tg_r = 29, 20, 6, 8, 6
+    total = 3 * tg_bh + 2 * tg_gap
+    y0 = (100 - total) / 2
+    ys = [y0 + i * (tg_bh + tg_gap) for i in range(3)]
+    s = f'<path d="M50 {y0-2:g} V{y0+total+2:g}" stroke="{fill_color}" stroke-width="5.5" stroke-linecap="round" fill="none"/>'
+    for y in ys:
+        s += f'<circle cx="50" cy="{y+tg_bh/2:g}" r="4.5" fill="none" stroke="{fill_color}" stroke-width="3.5"/>'
+    def tbubble(x, y, corner):
+        cr = 2.0
+        r_br = cr if corner == "br" else tg_r
+        r_bl = cr if corner == "bl" else tg_r
+        return (f'<path d="M{x+tg_r} {y} H{x+tg_bw-tg_r} a{tg_r} {tg_r} 0 0 1 {tg_r} {tg_r} V{y+tg_bh-r_br} a{r_br} {r_br} 0 0 1 -{r_br} {r_br} '
+                f'H{x+r_bl} a{r_bl} {r_bl} 0 0 1 -{r_bl} -{r_bl} V{y+tg_r} a{tg_r} {tg_r} 0 0 1 {tg_r} -{tg_r}Z" fill="{fill_color}"/>')
+    s += tbubble(50 - tg_g - tg_bw, ys[0], "br")
+    s += tbubble(50 + tg_g, ys[1], "bl")
+    s += tbubble(50 - tg_g - tg_bw, ys[2], "br")
+    return s
+
 DEFS = ('<defs><linearGradient id="fuchsia" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#DA3DB9"/><stop offset="1" stop-color="#A01C88"/></linearGradient>'
         '<radialGradient id="gloss" cx="50%" cy="0%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="55%" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>')
 TILE = '<rect width="100" height="100" rx="23" fill="url(#fuchsia)"/><rect width="100" height="100" rx="23" fill="url(#gloss)"/>'
@@ -59,6 +79,7 @@ write(f"{ROOT}/art/icon.svg", APP)
 LINE = '<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" fill="none" stroke-linecap="round" stroke-linejoin="round">\n  <!-- {note} -->\n  {body}\n</svg>\n'
 write(f"{ROOT}/art/synclane-icon.svg", LINE.format(note="SyncLane アイコン(線画・タイルなし。明るい背景用)。scripts/make-icons.py が作る。", body=glyph(FUCHSIA)))
 write(f"{ROOT}/art/synclane-icon-white.svg", LINE.format(note="暗い背景用(白抜き)。scripts/make-icons.py が作る。", body=glyph(W)))
+write(f"{ROOT}/art/tray-icon.svg", f'<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">\n  <!-- SyncLane トレイアイコン(macOS Template)。黒一色・透過背景。scripts/make-icons.py が作る。 -->\n  {tray_glyph("#000000")}\n</svg>\n')
 EXT = f'''<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 100 100">
   <!-- 拡張のアイコン。scripts/make-icons.py が作る。アプリアイコン用の余白と影を除き、ツールバーでは小さく出るので、タイルを全面に使う。 -->
   {DEFS}
@@ -76,9 +97,11 @@ for n in (16, 32, 48, 128):
 
 icons = f"{ROOT}/src-tauri/icons"
 for name in sorted(os.listdir(icons)):
-    if name.endswith(".png"):   # 今ある PNG と同じ大きさで作り直す
+    if name.endswith(".png") and not name.startswith("tray-icon"):   # 今ある PNG と同じ大きさで作り直す
         size = int(subprocess.check_output(["magick", "identify", "-format", "%w", f"{icons}/{name}"]).decode())
         png(f"{ROOT}/art/icon.svg", size, f"{icons}/{name}")
+png(f"{ROOT}/art/tray-icon.svg", 32, f"{icons}/tray-icon.png")
+png(f"{ROOT}/art/tray-icon.svg", 64, f"{icons}/tray-icon@2x.png")
 with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "target") if os.path.isdir(os.path.join(ROOT, "target")) else None) as tmp:
     iconset = f"{tmp}/icon.iconset"; os.makedirs(iconset)
     for size, nm in [(16,"icon_16x16"),(32,"icon_16x16@2x"),(32,"icon_32x32"),(64,"icon_32x32@2x"),(128,"icon_128x128"),(256,"icon_128x128@2x"),(256,"icon_256x256"),(512,"icon_256x256@2x"),(512,"icon_512x512"),(1024,"icon_512x512@2x")]:
