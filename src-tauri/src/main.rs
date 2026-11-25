@@ -1,8 +1,12 @@
 mod ingest_server;
+mod resident;
 mod sync_app;
 
 use synclane::{db, importer};
 use notify::Watcher;
+use resident::{
+    detect_tool_from_path, is_relevant_event_kind, should_hide_on_close, wait_with_debounce, ToolKind, WaitResult,
+};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -267,9 +271,9 @@ fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn autostart_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     if enabled {
-        app.autolaunch().enable().map_err(|e| e.to_string())
+        app.autolaunch().enable().map_err(|e| format!("自動起動の登録に失敗しました: {e}"))
     } else {
-        app.autolaunch().disable().map_err(|e| e.to_string())
+        app.autolaunch().disable().map_err(|e| format!("自動起動の解除に失敗しました: {e}"))
     }
 }
 
@@ -418,18 +422,49 @@ fn collect_codex(conn: &Arc<Mutex<Connection>>, root: &std::path::Path, handle: 
 }
 
 /// 会話ログディレクトリの変更を macOS FSEvents で監視する Watcher を生成する。
-fn setup_watcher(tx: std::sync::mpsc::Sender<()>, dirs: &[std::path::PathBuf]) -> Option<notify::RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
-                let _ = tx.send(());
+/// イベント発生時は対象ツールを判定してチャンネルへ送信する。
+fn setup_watcher(
+    tx: std::sync::mpsc::Sender<Option<ToolKind>>,
+    dirs: &[std::path::PathBuf],
+) -> Option<notify::RecommendedWatcher> {
+    let watcher_res = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+        Ok(event) => {
+            if is_relevant_event_kind(&event.kind) {
+                let mut found_any = false;
+                for path in &event.paths {
+                    if let Some(tool) = detect_tool_from_path(path) {
+                        let _ = tx.send(Some(tool));
+                        found_any = true;
+                    }
+                }
+                // 特定できなかったが監視ディレクトリ内の変更だった場合
+                if !found_any && !event.paths.is_empty() {
+                    let _ = tx.send(None);
+                }
             }
         }
-    }).ok()?;
+        Err(error) => {
+            eprintln!("synclane watcher event error: {error:#}");
+            // エラー時も念のため全体収集をトリガー
+            let _ = tx.send(None);
+        }
+    });
+
+    let mut watcher = match watcher_res {
+        Ok(w) => w,
+        Err(error) => {
+            eprintln!("synclane watcher init failed: {error:#}");
+            return None;
+        }
+    };
 
     for dir in dirs {
         if dir.exists() {
-            let _ = watcher.watch(dir, notify::RecursiveMode::Recursive);
+            if let Err(error) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
+                eprintln!("synclane watcher watch failed for {}: {error:#}", dir.display());
+            }
+        } else {
+            eprintln!("synclane watcher: directory does not exist yet (will retry in periodic loop): {}", dir.display());
         }
     }
 
@@ -465,7 +500,7 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if !IS_QUITTING.load(Ordering::SeqCst) {
+                if should_hide_on_close(window.label(), IS_QUITTING.load(Ordering::SeqCst)) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -532,7 +567,7 @@ fn main() {
                     }
                 }
                 // 会話ログの変更検知(macOS FSEvents)を設定する
-                let (notify_tx, notify_rx) = channel();
+                let (notify_tx, notify_rx) = channel::<Option<ToolKind>>();
                 let watch_dirs = vec![
                     root.clone(),
                     antigravity_root.join("conversations"),
@@ -540,60 +575,92 @@ fn main() {
                     copilot_root.clone(),
                     gemini_root.clone(),
                 ];
-                let _watcher = setup_watcher(notify_tx, &watch_dirs);
+                let mut watcher = setup_watcher(notify_tx, &watch_dirs);
+
+                // ツール別の増分取り込みヘルパー(None のときは全ツールを実行)
+                let collect_tools = |tools_to_run: Option<&std::collections::HashSet<ToolKind>>| {
+                    let should_run = |tool: ToolKind| tools_to_run.map(|s| s.contains(&tool)).unwrap_or(true);
+
+                    if should_run(ToolKind::Claude) {
+                        if let Ok(mut conn) = collector_conn.lock() {
+                            match importer::collect_claude_incremental(&root, &mut conn) {
+                                Ok(report) if report.events > 0 => { let _ = handle.emit("events-updated", report.events); }
+                                Ok(_) => {}
+                                Err(error) => eprintln!("synclane collector: {error:#}"),
+                            }
+                        }
+                    }
+                    if should_run(ToolKind::Codex) {
+                        collect_codex(&collector_conn, &codex_root, &handle);
+                    }
+                    if should_run(ToolKind::Copilot) {
+                        if let Ok(mut conn) = collector_conn.lock() {
+                            match importer::collect_copilot_incremental(&copilot_root, &mut conn) {
+                                Ok(report) if report.events > 0 => { let _ = handle.emit("events-updated", report.events); }
+                                Ok(_) => {}
+                                Err(error) => eprintln!("synclane copilot: {error:#}"),
+                            }
+                        }
+                    }
+                    if should_run(ToolKind::Gemini) {
+                        if let Ok(mut conn) = collector_conn.lock() {
+                            match importer::collect_gemini_incremental(&gemini_root, &mut conn) {
+                                Ok(report) if report.events > 0 => { let _ = handle.emit("events-updated", report.events); }
+                                Ok(_) => {}
+                                Err(error) => eprintln!("synclane gemini: {error:#}"),
+                            }
+                        }
+                    }
+                    if should_run(ToolKind::Antigravity) {
+                        if let Ok(mut conn) = collector_conn.lock() {
+                            match importer::collect_antigravity_incremental(&antigravity_root, &mut conn) {
+                                Ok(report) if report.events > 0 => { let _ = handle.emit("events-updated", report.events); }
+                                Ok(_) => {}
+                                Err(error) => eprintln!("synclane antigravity: {error:#}"),
+                            }
+                        }
+                    }
+                };
+
+                // 起動直後の初回収集(全ツール)
+                collect_tools(None);
+
                 loop {
-                    if let Ok(mut conn) = collector_conn.lock() {
-                        match importer::collect_claude_incremental(&root, &mut conn) {
-                            // 新しいイベントが入ったことだけ画面に知らせる(一覧は動かさない)
-                            Ok(report) if report.events > 0 => {
-                                let _ = handle.emit("events-updated", report.events);
+                    match wait_with_debounce(&notify_rx, Duration::from_secs(60), Duration::from_millis(500)) {
+                        WaitResult::Event(items) => {
+                            // イベント検知: 変更されたツールだけをピンポイントで収集
+                            let mut specific_tools = std::collections::HashSet::new();
+                            let mut run_all = false;
+                            for item in items {
+                                match item {
+                                    Some(tool) => { specific_tools.insert(tool); }
+                                    None => { run_all = true; break; }
+                                }
                             }
-                            Ok(_) => {}
-                            Err(error) => eprintln!("synclane collector: {error:#}"),
-                        }
-                    }
-                    // Codex のログは数百 MB になる。読んで解析する間は DB のロックを持たず、書くときだけ持つ
-                    // (初回の取り込みで、画面が固まらないように)
-                    collect_codex(&collector_conn, &codex_root, &handle);
-                    // GitHub Copilot CLI の JSONL セッション。追記された行だけ読む
-                    if let Ok(mut conn) = collector_conn.lock() {
-                        match importer::collect_copilot_incremental(&copilot_root, &mut conn) {
-                            Ok(report) if report.events > 0 => {
-                                let _ = handle.emit("events-updated", report.events);
+                            if run_all || specific_tools.is_empty() {
+                                collect_tools(None);
+                            } else {
+                                collect_tools(Some(&specific_tools));
                             }
-                            Ok(_) => {}
-                            Err(error) => eprintln!("synclane copilot: {error:#}"),
                         }
-                    }
-                    // Gemini CLI の記録は小さい。大きさが変わったファイルだけ、読み直す
-                    if let Ok(mut conn) = collector_conn.lock() {
-                        match importer::collect_gemini_incremental(&gemini_root, &mut conn) {
-                            Ok(report) if report.events > 0 => {
-                                let _ = handle.emit("events-updated", report.events);
+                        WaitResult::Timeout => {
+                            // 60秒定期バックアップ: 全ツールを収集
+                            collect_tools(None);
+                            // 起動時に存在しなかったディレクトリがあれば監視を追加登録
+                            if let Some(ref mut w) = watcher {
+                                for dir in &watch_dirs {
+                                    if dir.exists() {
+                                        let _ = w.watch(dir, notify::RecursiveMode::Recursive);
+                                    }
+                                }
                             }
-                            Ok(_) => {}
-                            Err(error) => eprintln!("synclane gemini: {error:#}"),
                         }
-                    }
-                    // Antigravity CLI の会話。書き換わったものだけ、読み直す
-                    if let Ok(mut conn) = collector_conn.lock() {
-                        match importer::collect_antigravity_incremental(&antigravity_root, &mut conn) {
-                            Ok(report) if report.events > 0 => {
-                                let _ = handle.emit("events-updated", report.events);
-                            }
-                            Ok(_) => {}
-                            Err(error) => eprintln!("synclane antigravity: {error:#}"),
+                        WaitResult::Disconnected => {
+                            // 受信チャンネル切断時もループを抜けず、定期収集を継続
+                            eprintln!("synclane watcher: channel disconnected, continuing periodic loop");
+                            collect_tools(None);
+                            thread::sleep(Duration::from_secs(60));
                         }
-                    }
-                    // ファイル変更イベントを待つ(最大60秒でタイムアウトしてバックアップ定期収集)
-                    match notify_rx.recv_timeout(Duration::from_secs(60)) {
-                        Ok(()) => {
-                            // イベント検知！連続書き込みを吸収するため 500ms デバウンス
-                            thread::sleep(Duration::from_millis(500));
-                            while notify_rx.try_recv().is_ok() {}
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             });
